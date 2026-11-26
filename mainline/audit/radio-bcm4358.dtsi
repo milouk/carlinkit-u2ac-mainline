@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Carlinkit U2AC: Broadcom BCM4358 (SDIO 0x02d0:0x4358 Wi-Fi on usdhc1, BT on uart3 with RTS/CTS).
+ * Facts from the unit's stock firmware (fp/scripts.txt, 2026-11-25):
+ *  - Wi-Fi power = GPIO1_IO05 (stock "wlreg_on", active low): reg_wlan in the board DTS.
+ *  - BT reset = GPIO1_IO01: the vendor pulses it high 100 ms then leaves it LOW for operation
+ *    (init_gpio.sh "reset BT", load_bluetooth_wifi.sh reset_bluetooth) -> BT powered = low.
+ *  - vendor attaches BT at 3 Mbaud with BCM4358A3.hcd (brcm_patchram_plus --baudrate 3000000).
+ * Wi-Fi: brcmfmac with patch 0005 (BCM4358 over SDIO), firmware brcm/brcmfmac4358-sdio.bin = the vendor's
+ * fw_bcm4358_ag_apsta.bin (4358a3-roml/sdio 7.112.100.4) + its nvram_4358.txt.
+ */
+&iomuxc {
+	pinctrl_bt: btgrp {
+		fsl,pins = <
+			MX6UL_PAD_GPIO1_IO01__GPIO1_IO01	0x17059
+		>;
+	};
+};
+
+&uart3 {
+	bluetooth {
+		compatible = "brcm,bcm43540-bt";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_bt>;
+		shutdown-gpios = <&gpio1 1 GPIO_ACTIVE_LOW>;
+		max-speed = <3000000>;
+	};
+};
+
+&usdhc1 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	wifi@1 {
+		compatible = "brcm,bcm4329-fmac";
+		reg = <1>;
+		/* The firmware's built-in CLM (ClmImport 1.34.0) has GR/4, not GR/0 (patch 0005's ISO3166 fallback
+		 * sends GR/0 -> restricted fallback locale, no VHT80). The map takes priority over the fallback
+		 * (brcmfmac of.c parses it for SDIO). Verify: no "Firmware rejected country setting" and
+		 * `iw phy phy0 channels` lists VHT80 on 5180 MHz. */
+		brcm,ccode-map = "GR-GR-4", "DE-DE-0", "CN-CN-11";
+	};
+};

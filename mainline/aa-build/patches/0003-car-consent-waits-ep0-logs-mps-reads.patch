@@ -1,0 +1,161 @@
+diff --git a/src/ffs_io.rs b/src/ffs_io.rs
+index fbf2aea..3b662ac 100644
+--- a/src/ffs_io.rs
++++ b/src/ffs_io.rs
+@@ -86,7 +86,12 @@ impl IntoStreamReader for EndpointReceiver {
+     ) -> std::io::Result<StreamReader<impl Stream<Item = std::io::Result<BytesMut>>, BytesMut>>
+     {
+         let max_packet_size = self.max_packet_size().map_err(std::io::Error::other)?;
+-        let context = RecvContext::new(self, transfer_size(max_packet_size));
++        // U2AC: car -> dongle reads stay one max-packet per transfer (upstream). A 16 KiB read only
++        // completes on a short packet, so a head unit that ends a full-packet write without a
++        // zero-length packet would leave that frame stuck in the UDC until its next write (seen with
++        // carsim/mockhu.py --no-zlp: 512/4096/8192-byte frames stalled > 5 s). This direction carries
++        // touch, sensor and mic data only; the 16 KiB transfers stay on the write (video) side.
++        let context = RecvContext::new(self, max_packet_size);
+ 
+         Ok(StreamReader::new(futures::stream::try_unfold(
+             context,
+diff --git a/src/main.rs b/src/main.rs
+index 954505b..387f34e 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1322,6 +1322,11 @@ async fn tokio_main(
+             )
+             .await
+             {
++                // U2AC: io_loop waits for usb_accessory_ready (minutes now): wake it, it finds no session,
++                // drops the phone connection and sends the one restart for this iteration; wait for that
++                // restart here, so it cannot land in (and tear down) the NEXT iteration's session
++                usb_accessory_ready.notify_one();
++                let _ = tokio::time::timeout(Duration::from_secs(20), need_restart.recv()).await;
+                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                 continue;
+             }
+diff --git a/src/proxy.rs b/src/proxy.rs
+index c50941a..86fc0ee 100644
+--- a/src/proxy.rs
++++ b/src/proxy.rs
+@@ -54,7 +54,16 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
+ // Bounded below the transfer-stall timeout (config.timeout_secs, default 10s) so a
+ // missed/late notification can't outlast the stall detector, and above the observed
+ // ~2-3s gadget-switch duration so the common case never actually waits this long.
+-const USB_ACCESSORY_READY_TIMEOUT: Duration = Duration::from_secs(8);
++// U2AC: the gadget switch can now take minutes (AA_MTP_WAIT_SECS: a car that asks the driver first),
++// and main.rs notifies usb_accessory_ready when the USB setup FAILED too, so this is only a safety net:
++// AA_USB_READY_SECS, default 300 s (upstream 8 s, which tore down every switch slower than that).
++fn usb_accessory_ready_timeout() -> Duration {
++    let v = std::env::var("AA_USB_READY_SECS")
++        .ok()
++        .and_then(|v| v.trim().parse::<u64>().ok())
++        .unwrap_or(300);
++    Duration::from_secs(v.clamp(8, 900))
++}
+ pub const BUFFER_LEN: usize = 16 * 1024;
+ const TCP_CLIENT_TIMEOUT: Duration = Duration::new(30, 0);
+ const COMP_APP_TCP_PORT: u16 = 9999;
+@@ -893,7 +902,7 @@ pub async fn io_loop(
+             // trips the stall-detection timeout above every single session.
+             // Wait for the "switched" signal first, bounded so a failed/skipped
+             // gadget switch elsewhere can't hang this loop forever.
+-            if timeout(USB_ACCESSORY_READY_TIMEOUT, usb_accessory_ready.notified())
++            if timeout(usb_accessory_ready_timeout(), usb_accessory_ready.notified())
+                 .await
+                 .is_err()
+             {
+diff --git a/src/usb_functionfs.rs b/src/usb_functionfs.rs
+index c2d3d4b..8c70809 100644
+--- a/src/usb_functionfs.rs
++++ b/src/usb_functionfs.rs
+@@ -76,6 +76,15 @@ const AOA_ACCESSORY_PID: u16 = 0x2d00;
+ const MTP_STAGE_VID: u16 = 0x18d1;
+ const MTP_STAGE_PID: u16 = 0x4ee1;
+ 
++/// U2AC: a wait in seconds from the environment (`name`), else `default`, clamped to `min..=max`.
++fn env_wait(name: &str, default: u64, min: u64, max: u64) -> Duration {
++    let v = std::env::var(name)
++        .ok()
++        .and_then(|v| v.trim().parse::<u64>().ok())
++        .unwrap_or(default);
++    Duration::from_secs(v.clamp(min, max))
++}
++
+ /// Read/write halves of the active accessory session, handed off to
+ /// `proxy::io_loop` once the AOA handshake has completed (or been given
+ /// up on, see `require_accessory_start`).
+@@ -352,7 +361,10 @@ impl FfsGadget {
+         &mut self,
+         require_accessory_start: bool,
+     ) -> Option<AccessorySession> {
+-        const MTP_WAIT_TIMEOUT: Duration = Duration::from_secs(6);
++        // U2AC: upstream waits 6 s. A head unit can ask the driver first ("Enable Android Auto?",
++        // Ford SYNC 3) and only then send ACCESSORY_START; at 6 s the gadget was torn down under it
++        // (carsim/mockhu.py --consent 15 reproduces it). AA_MTP_WAIT_SECS, default 90 s.
++        let mtp_wait_timeout = env_wait("AA_MTP_WAIT_SECS", 90, 6, 600);
+         const MAX_TRIES: u32 = 2;
+         // How long to wait after tearing a failed gadget down before trying
+         // again. Deliberately generous (not just "a moment") — too short a
+@@ -375,7 +387,7 @@ impl FfsGadget {
+         if self.legacy {
+             let mut got_start = false;
+             for try_n in 1..=MAX_TRIES {
+-                match self.run_mtp_stage(&udc, MTP_WAIT_TIMEOUT).await {
++                match self.run_mtp_stage(&udc, mtp_wait_timeout).await {
+                     Ok(()) => {
+                         got_start = true;
+                         break;
+@@ -736,13 +748,15 @@ impl FfsGadget {
+         // runtime (webserver, Bluetooth, ...). So never "try anyway": if the
+         // host does not enable the gadget in time, give up and let the caller
+         // tear down and retry.
+-        const ENABLE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+-        if timeout(ENABLE_WAIT_TIMEOUT, enabled.notified())
++        // U2AC: AA_ENABLE_WAIT_SECS (default 30 s, upstream 5 s): a slow head unit may configure the
++        // re-enumerated accessory late
++        let enable_wait_timeout = env_wait("AA_ENABLE_WAIT_SECS", 30, 5, 300);
++        if timeout(enable_wait_timeout, enabled.notified())
+             .await
+             .is_err()
+         {
+             return Err(anyhow!(
+-                "host did not enable the accessory gadget within {ENABLE_WAIT_TIMEOUT:?}"
++                "host did not enable the accessory gadget within {enable_wait_timeout:?}"
+             ));
+         }
+ 
+@@ -803,7 +817,7 @@ fn handle_ep0_event(event: Event) -> bool {
+             if (request_type & USB_TYPE_MASK) == USB_TYPE_VENDOR {
+                 match request {
+                     AOA_GET_PROTOCOL => {
+-                        debug!("{} received AOA GET_PROTOCOL", NAME);
++                        info!("{} 🔌 car asked AOA GET_PROTOCOL (answering 2)", NAME);
+                         let _ = req.send(&[0x02, 0x00]);
+                     }
+                     _ => {
+@@ -829,11 +843,13 @@ fn handle_ep0_event(event: Event) -> bool {
+             if (request_type & USB_TYPE_MASK) == USB_TYPE_VENDOR {
+                 match request {
+                     AOA_SEND_STRING => {
++                        // U2AC: the string's index is wIndex (upstream logged wValue, always 0)
++                        let index = ctrl_req.index;
+                         if let Ok(data) = req.recv_all() {
+-                            debug!(
+-                                "{} received AOA string index {value}: {}",
++                            info!(
++                                "{} 🔌 car AOA string {index}: {}",
+                                 NAME,
+-                                String::from_utf8_lossy(&data)
++                                String::from_utf8_lossy(&data).trim_end_matches('\0')
+                             );
+                         }
+                     }
+@@ -857,7 +873,8 @@ fn handle_ep0_event(event: Event) -> bool {
+         }
+ 
+         other => {
+-            debug!("{} ep0 event: {other:?}", NAME);
++            // U2AC: Bind/Enable/Disable/Suspend/Resume are a handful per session and say what the car did
++            info!("{} 🔌 ep0 event: {other:?}", NAME);
+         }
+     }
+ 

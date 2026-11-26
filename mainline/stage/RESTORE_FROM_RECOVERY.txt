@@ -1,0 +1,5 @@
+Back to stock from the mainline recovery (DT map: mtd0 uboot RO, mtd1 env, mtd2 kernel, mtd3 rootfs RO):
+  scp -O mtd1-stock.bin env-stock.bin root@192.168.50.2:/tmp/     (pw: baseline)
+  flashcp -v /tmp/mtd1-stock.bin /dev/mtd2 && sha256sum /dev/mtd2   # = 9e12e1fa...
+  flashcp -v /tmp/env-stock.bin  /dev/mtd1 && sha256sum /dev/mtd1   # = sha of env-stock.bin
+  reboot     -> stock 2024.10.31 exactly as before (rootfs was never writable under mainline)

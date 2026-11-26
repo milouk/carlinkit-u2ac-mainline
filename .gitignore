@@ -1,0 +1,11 @@
+# upstream checkout (OCBM_BASE + ocbm-u2ac.patch), build outputs, local keys and test logs
+mainline/ocbm/
+mainline/out-*/
+mainline/keys/
+mainline/aa-build/out/
+mainline/aa-build/logs/
+mainline/carsim/out/
+mainline/carsim/.venv
+mainline/carsim/.fakephone
+*.log
+.DS_Store
