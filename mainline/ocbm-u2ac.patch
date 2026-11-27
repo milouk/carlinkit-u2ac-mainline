@@ -2050,10 +2050,10 @@ index 0000000..f1ec3a7
 \ No newline at end of file
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/etc/baseline/board-rcS.sh b/baseline/arm-imx6ul-u2ac/rootfs/etc/baseline/board-rcS.sh
 new file mode 100644
-index 0000000..2282d11
+index 0000000..6a35191
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/etc/baseline/board-rcS.sh
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,127 @@
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# i.MX6ULL hooks for common/rootfs/etc/init.d/rcS. LEDs (gpio-leds, pins and polarity from LIVI's DTS;
 +# on hardware UNVERIFIED for the baseline), as `led` documents them:
@@ -2117,7 +2117,8 @@ index 0000000..2282d11
 +    echo config > "$UPG/configs/c.1/strings/0x409/configuration"
 +    mount -t functionfs u2acprobe "$UPF" || return 1
 +    : > "$UPO"
-+    u2ac-usbprobe "$UPF" 10000 3000 > "$UPO" 2>> /run/log/u2ac-usbprobe.log &
++    # usbprobe_up [ENABLE_MS AOA_MS]: the boot's windows by default; u2ac-aa's car-off sleep waits much longer
++    u2ac-usbprobe "$UPF" "${1:-10000}" "${2:-3000}" > "$UPO" 2>> /run/log/u2ac-usbprobe.log &
 +    echo $! > /run/u2ac-usbprobe.pid
 +    _n=0; while [ ! -e "$UPF/ep1" ] && [ $_n -lt 30 ]; do sleep 0.1; _n=$((_n + 1)); done
 +    [ -e "$UPF/ep1" ] || return 1
@@ -203091,10 +203092,10 @@ index 0000000..8114b82
 \ No newline at end of file
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
 new file mode 100755
-index 0000000..e049148
+index 0000000..2b41210
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
-@@ -0,0 +1,790 @@
+@@ -0,0 +1,852 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# u2ac-aa start|stop|status|persist|aa-now|watch|dev on|off|aa|flightlog [last|SEQ]  (Carlinkit U2AC, milouk 2026-11-26)
@@ -203562,6 +203563,53 @@ index 0000000..e049148
 +    return $_bad
 +}
 +
++# Car off, USB still powered (Ford SYNC 3 keeps the port powered up to ~10 min, other cars for good): once a
++# drive has ended and the car has not used the USB port for SLEEP_S, the dongle sleeps. aa-proxy-rs stops (it
++# would keep calling the phone over Bluetooth and pull it onto the hotspot while you walk away or sit in the
++# parked car), the hotspot and the Bluetooth radio go off, the light goes dark. The port shows the boot's
++# MTP-stage identity again (board-rcS.sh usbprobe_up, u2ac-usbprobe); the first host that configures it wakes
++# the dongle with a reboot: a car (it asks AOA at once) or a computer (maintenance mode then, as at boot).
++# A wrong guess (a car that is on but has not used the port for SLEEP_S: the phone stayed away that long)
++# costs a reboot: the car configures the probe at once. Off: `: > /run/persist/u2ac-sleep-off` (web Options).
++SLEEP_S=${U2AC_SLEEP_S:-90}
++bt_power() { # on|off, the controller only (bluetoothd stays)
++    rm -f /run/btpower.in; mkfifo /run/btpower.in && exec 8<> /run/btpower.in || return 1
++    timeout 3 btmgmt -i hci0 power "$1" <&8 > /dev/null 2>&1; _r=$?
++    exec 8<&-; rm -f /run/btpower.in; return $_r
++}
++car_sleep() { # WHY
++    say "sleep: $1: radios off until a host uses the USB port again"
++    : > "$WI/off"   # radio_watch must not bring the radios back
++    : > /run/u2ac-sleeping
++    [ -e "$P/u2ac-flightlog-off" ] || fl_write sleep
++    pid_ok /run/aa-proxy-rs.pid && kill "$_p" 2> /dev/null   # the supervisor first, then the relay
++    rm -f /run/aa-proxy-rs.pid; killall aa-proxy-rs 2> /dev/null
++    for _g in /sys/kernel/config/usb_gadget/*/UDC; do
++        [ -n "$(cat "$_g" 2> /dev/null)" ] && echo "" > "$_g" 2> /dev/null
++    done
++    for _f in /run/hostapd.pid /run/udhcpd-wlan.pid; do pid_ok "$_f" && kill "$_p" 2> /dev/null; rm -f "$_f"; done
++    ip link set wlan0 down 2> /dev/null
++    bt_power off || say "sleep: Bluetooth power-off failed"
++    led 000000
++    cpu_mode normal
++    # the wake: the probe gadget on the port, hour by hour, until a host configures it
++    (
++        trap '' HUP   # `u2ac-aa sleep-now` over ssh: the wake must outlive the session
++        . /etc/baseline/board.env 2> /dev/null; . /etc/baseline/board-rcS.sh
++        while :; do
++            if usbprobe_up 3600000 3000; then usbprobe_end
++            else usbprobe_down; echo failed > /run/u2ac-usbprobe; sleep 30; fi
++            _v=$(cat /run/u2ac-usbprobe 2> /dev/null)
++            case $_v in
++                car | noaoa)
++                    say "sleep: a host configured the USB port ($_v): waking up (reboot)"
++                    state_save; sync; reboot; exit 0 ;;
++            esac
++        done
++    ) > /dev/null 2>&1 &
++    echo $! > /run/u2ac-wake.pid
++}
++
 +# cpu_mode session|normal. An AA session: full speed, and no LOW-POWER-IDLE (cpuidle state2 flushes L1+L2 on
 +# every entry and takes 300 us to wake, on every IRQ-driven wakeup of the relay; ondemand would also settle at
 +# 198-396 MHz at relay loads, audit/ROUND2_PERFORMANCE.md). Otherwise ondemand with every idle state.
@@ -203799,6 +203847,7 @@ index 0000000..e049148
 +        # started or stopped outside a session (aa-now, a test run), not only at session changes
 +        ar() { pgrep -x aa-proxy-rs > /dev/null && echo 1 || echo 0; }
 +        m=normal; k=0; lit=idle$(ar); [ $fault = 1 ] && lit=fault; bk=$(bt_key); live=0; fl_at=18; fl_sz=; wf=0
++        had=0; seen=0; sleep_ticks=$((SLEEP_S / 5))
 +        while :; do
 +            sleep "${U2AC_TICK:-5}"; k=$((k + 1))   # U2AC_TICK: the selftest's fast clock
 +            # the radios' daemons (radio_watch): wf = something is down right now
@@ -203809,7 +203858,18 @@ index 0000000..e049148
 +            if car_live; then st=live; elif [ $m = session ]; then st=phone; elif [ $fault = 1 ] || [ $wf = 1 ]; then st=fault
 +            else st=idle$(ar); fi
 +            [ $st = live ] && fault=0
-+            if [ $st != $lit ]; then
++            # car off, USB still powered (car_sleep): a drive ended and the car has not used the port (the UDC is
++            # "configured" only while a host uses it) for SLEEP_S, in ticks of 5 s
++            if [ -s /run/aa-proxy-rs.pid ] && [ ! -e /run/u2ac-sleeping ] && [ ! -e "$P/u2ac-sleep-off" ]; then
++                us=; for _u in /sys/class/udc/*; do { read -r us < "$_u/state"; } 2> /dev/null; break; done
++                if [ $st = live ] || [ "$us" = configured ]; then
++                    [ $st = live ] && had=1; seen=$k
++                elif [ $had = 1 ] && [ $m != session ] && [ $((k - seen)) -ge $sleep_ticks ]; then
++                    car_sleep "no car on USB for ${SLEEP_S} s after the drive (USB ${us:-unknown})"
++                fi
++            fi
++            [ -e /run/u2ac-sleeping ] && lit=sleep
++            if [ $st != $lit ] && [ $lit != sleep ]; then
 +                case $st in live) led 003b00 ;; phone) led 00007f 300 100 ;; fault) led 69480f 1000 500 ;;
 +                    *) led_state ;; esac
 +                lit=$st
@@ -203873,7 +203933,10 @@ index 0000000..e049148
 +        _r=; for _x in hostapd wifi-rebind bluetoothd bt-rebind; do
 +            [ -s "$WI/$_x.n" ] && _r="$_r $_x=$(cat "$WI/$_x.n")"; done
 +        echo "radio repairs this boot:${_r:- none}$([ -e "$WI/off" ] && echo ' (watch off)')"
++        if [ -e /run/u2ac-sleeping ]; then echo "car-off sleep: SLEEPING (radios off, USB port waits for a host)"
++        else echo "car-off sleep: $([ -e "$P/u2ac-sleep-off" ] && echo off || echo "on (after ${SLEEP_S} s without the car)")"; fi
 +        ;;
++    sleep-now) mkdir -p "$WI"; car_sleep "by hand (u2ac-aa sleep-now)"; echo "sleeping: radios off, the USB port waits for a host" ;;
 +    watch) mkdir -p "$WI"; [ -s "$WI/wlan.host" ] || watch_init; radio_watch && echo "radios ok" || { echo "a radio is down (see $LOG)"; exit 1; } ;;
 +    dev)
 +        case ${2:-} in
@@ -203883,14 +203946,14 @@ index 0000000..e049148
 +            *) echo "usage: u2ac-aa dev on|off|aa" >&2; exit 2 ;;
 +        esac
 +        ;;
-+    *) echo "usage: u2ac-aa start|stop|status|persist|aa-now|watch|dev on|off|aa|flightlog [last|SEQ]" >&2; exit 2 ;;
++    *) echo "usage: u2ac-aa start|stop|status|persist|aa-now|watch|sleep-now|dev on|off|aa|flightlog [last|SEQ]" >&2; exit 2 ;;
 +esac
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-metrics b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-metrics
 new file mode 100755
-index 0000000..482cc03
+index 0000000..04cf66b
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-metrics
-@@ -0,0 +1,222 @@
+@@ -0,0 +1,225 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# u2ac-metrics: the dongle's health as Prometheus text (exposition format 0.0.4), for GET /cgi-bin/metrics
@@ -203939,6 +204002,7 @@ index 0000000..482cc03
 +    -v paired="$PAIRED" -v known="${KNOWN:-0}" -v hci="$HCI" \
 +    -v guardoff="$([ -e "$P/u2ac-hfp-guard-off" ] && echo 1 || echo 0)" \
 +    -v fltoff="$([ -e "$P/u2ac-flightlog-off" ] && echo 1 || echo 0)" \
++    -v sleeping="$([ -e "$R/run/u2ac-sleeping" ] && echo 1 || echo 0)" -v sleepoff="$([ -e "$P/u2ac-sleep-off" ] && echo 1 || echo 0)" \
 +    -v probe="$(cat "$R/run/u2ac-usbprobe" 2> /dev/null)" -v host="$(cat "$R/run/u2ac-usbhost" 2> /dev/null)" \
 +    -v rel="$(head -n 1 "$R/etc/baseline-release" 2> /dev/null)" -v kver="$(uname -r)" '
 +function rd(f,   l) { l = ""; if ((getline l < f) <= 0) l = ""; close(f); return l }
@@ -204112,6 +204176,8 @@ index 0000000..482cc03
 +    n = split("hostapd wifi-rebind bluetoothd bt-rebind", W0, " ")
 +    for (i = 1; i <= n; i++) { v = rd(R "/run/u2ac-watch/" W0[i] ".n"); gsub(/-/, "_", W0[i]); out("u2ac_radio_repairs_total", "what=\"" W0[i] "\"", v + 0) }
 +    one("u2ac_flightlog_enabled", "gauge", "flight recorder switched on", fltoff ? 0 : 1)
++    one("u2ac_sleep_enabled", "gauge", "car-off sleep switched on", sleepoff ? 0 : 1)
++    one("u2ac_sleeping", "gauge", "1 while the dongle sleeps (car off, USB still powered): radios off", sleeping)
 +}'
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/wifi-connect b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/wifi-connect
 new file mode 100755
@@ -205632,7 +205698,7 @@ index 0000000..b43d213
 +opt lease 86400
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md
 new file mode 100644
-index 0000000..202d9a2
+index 0000000..00c8f5f
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md
 @@ -0,0 +1,107 @@
@@ -205681,7 +205747,7 @@ index 0000000..202d9a2
 +| `wifi` | `ssid`, `psk`, `alias` (each optional, empty keeps the current value) | Rewrites the first `  ssid = "…"`, `  wpa_passphrase = "…"` and `  btalias = "…"` lines of `/etc/aa-proxy-rs/config.toml`, writes `/run/persist/u2ac-wifi.conf`, then `u2ac-aa persist`. Applies after a reboot. |
 +| `forget` | `dev=AA:BB:CC:DD:EE:FF` or `dev=all` | `btmgmt -i hci0 unpair`, removes the device directory (and its `cache/` entry), then `u2ac-aa persist`. |
 +| `mode` | `to=auto`, `maintenance` or `aa` | `u2ac-aa dev off`, `dev on` or `dev aa` (from the next boot). |
-+| `opt` | `key`, `value` (only these pairs) | `guard` on/off (hands-free guard, flag `u2ac-hfp-guard-off`), `flightlog` on/off (`u2ac-flightlog-off`, at once), `led` on/off (`u2ac-led-off`, at once), `btbaud` fast/slow (`u2ac-bt-slowbaud`), `btpatch` stock/0092 (`u2ac-bt-0092`), `usbchunk` 512/1024/2048/4096/8192/16384 (`u2ac-ffs-chunk`, 16384 = default = no file). Then `u2ac-aa persist`. |
++| `opt` | `key`, `value` (only these pairs) | `guard` on/off (hands-free guard, flag `u2ac-hfp-guard-off`), `flightlog` on/off (`u2ac-flightlog-off`, at once), `sleep` on/off (car-off sleep, `u2ac-sleep-off`, at once), `led` on/off (`u2ac-led-off`, at once), `btbaud` fast/slow (`u2ac-bt-slowbaud`), `btpatch` stock/0092 (`u2ac-bt-0092`), `usbchunk` 512/1024/2048/4096/8192/16384 (`u2ac-ffs-chunk`, 16384 = default = no file). Then `u2ac-aa persist`. |
 +| `width` | `to=40` or `80` | Creates or removes `/run/persist/u2ac-wifi-80`, then `u2ac-aa persist`. The hotspot runs at 80 MHz from the next boot only when the firmware offers VHT80 on channel 36. 40 MHz is the default. |
 +| `aa-now` | | `u2ac-aa aa-now`. |
 +| `reboot` | | `u2ac-aa persist`, then `reboot` 1 s after the reply. |
@@ -205937,10 +206003,10 @@ index 0000000..b88e822
 +}' "$V"
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/action b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/action
 new file mode 100755
-index 0000000..442d31c
+index 0000000..4561853
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/action
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,193 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# POST /cgi-bin/action (application/x-www-form-urlencoded), fields:
@@ -206090,6 +206156,8 @@ index 0000000..442d31c
 +        guard:off) optflag u2ac-hfp-guard-off set; M="Hands-free guard off." ;;
 +        flightlog:on) optflag u2ac-flightlog-off clear; M="Flight recorder on."; WHEN=now ;;
 +        flightlog:off) optflag u2ac-flightlog-off set; M="Flight recorder off."; WHEN=now ;;
++        sleep:on) optflag u2ac-sleep-off clear; M="Sleep when the car is off: on."; WHEN=now ;;
++        sleep:off) optflag u2ac-sleep-off set; M="Sleep when the car is off: off."; WHEN=now ;;
 +        # on: lit again at once in its last colour (steady); its next state change restores the blink pattern
 +        led:on) optflag u2ac-led-off clear; echo 255 > "$R/sys/class/leds/rgb:status/brightness" 2> /dev/null
 +            M="Status light on."; WHEN=now ;;
@@ -206188,10 +206256,10 @@ index 0000000..51ed059
 +exec u2ac-metrics
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/settings b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/settings
 new file mode 100755
-index 0000000..ce61b11
+index 0000000..3ba1e67
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/settings
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,66 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# GET /cgi-bin/settings -> current Wi-Fi name and channel width, Bluetooth name, paired phones, mode, what a reboot would
@@ -206230,6 +206298,7 @@ index 0000000..ce61b11
 +# the other options (cgi-bin/action opt): flags in /run/persist
 +OG=on; [ -e "$P/u2ac-hfp-guard-off" ] && OG=off
 +OF=on; [ -e "$P/u2ac-flightlog-off" ] && OF=off
++OS=on; [ -e "$P/u2ac-sleep-off" ] && OS=off
 +OL=on; [ -e "$P/u2ac-led-off" ] && OL=off
 +OB=fast; [ -e "$P/u2ac-bt-slowbaud" ] && OB=slow
 +OP=stock; [ -e "$P/u2ac-bt-0092" ] && OP=0092
@@ -206237,8 +206306,8 @@ index 0000000..ce61b11
 +case $OU in 512 | 1024 | 2048 | 4096 | 8192 | 16384) ;; *) OU=16384 ;; esac
 +
 +hdr
-+printf '{"ok":true,"opts":{"guard":"%s","flightlog":"%s","led":"%s","btbaud":"%s","btpatch":"%s","usbchunk":%s},' \
-+    "$OG" "$OF" "$OL" "$OB" "$OP" "$OU"
++printf '{"ok":true,"opts":{"guard":"%s","flightlog":"%s","led":"%s","btbaud":"%s","btpatch":"%s","usbchunk":%s,"sleep":"%s"},' \
++    "$OG" "$OF" "$OL" "$OB" "$OP" "$OU" "$OS"
 +printf '"wifi":{"ssid":%s,"live_ssid":%s,"override":%s,"width":{"set":%s,"live":%s,"vht80":%s}},"bt":{"alias":%s},"mode":"%s","pending_reboot":%s,"recovery":%s,"aaproxy_web":%s,"paired":[' \
 +    "$(jstr "$SSID")" "$(jstr "$LIVE")" "$OVR" "$WSET" "${WLIVE:-null}" "$V80" "$(jstr "$ALIAS")" "$MODE" "$PENDING" "$REC" "$(jstr "$WEBSRV")"
 +_sep=
@@ -206451,10 +206520,10 @@ index 0000000..4d93e02
 +fi
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/index.html b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/index.html
 new file mode 100644
-index 0000000..0798a22
+index 0000000..31dee4e
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/index.html
-@@ -0,0 +1,506 @@
+@@ -0,0 +1,507 @@
 +<!doctype html>
 +<html lang="en">
 +<head>
@@ -206629,6 +206698,7 @@ index 0000000..0798a22
 +  <div class="panel" id="opts">
 +    <label class="opt"><input type="checkbox" data-key="guard" data-on="on" data-off="off" data-when="after a reboot"><b>Hands-free guard (calls)</b><span class="sub">Keeps the car's in-band ringing off, so callers can hear you on Ford SYNC 3. Calls still go through the car.</span></label>
 +    <label class="opt"><input type="checkbox" data-key="flightlog" data-on="on" data-off="off" data-when="now"><b>Flight recorder</b><span class="sub">Keeps the logs of each car run in spare flash. Read them on the Logs tab.</span></label>
++    <label class="opt"><input type="checkbox" data-key="sleep" data-on="on" data-off="off" data-when="now"><b>Sleep when the car is off</b><span class="sub">If the car keeps the USB port powered after a drive, the dongle turns its radios off after 90 s and stops calling your phone. The car wakes it again.</span></label>
 +    <label class="opt"><input type="checkbox" data-key="led" data-on="on" data-off="off" data-when="now"><b>Status light</b><span class="sub">The coloured light. Off saves about 5 to 20 mA.</span></label>
 +  </div>
 +

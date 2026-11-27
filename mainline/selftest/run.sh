@@ -93,16 +93,16 @@ L="width 40"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&a
 docker exec u2ac-selftest-web test ! -e /run/persist/u2ac-wifi-80 && ok "web: width 40 clears its flag" || bad "web: width 40 flag left"
 L="width refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=width&to=160" "$A"
 # the other options: each key flips its flag (or config.toml line), settings reports it, unknown ones are refused
-for kv in guard:off flightlog:off led:off btbaud:slow btpatch:0092 usbchunk:512; do
+for kv in guard:off flightlog:off led:off btbaud:slow btpatch:0092 usbchunk:512 sleep:off; do
   L="option ${kv%%:*} ${kv#*:}"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=${kv%%:*}&value=${kv#*:}" "$A"
 done
-docker exec u2ac-selftest-web sh -c 'cd /run/persist && test -e u2ac-hfp-guard-off && test -e u2ac-flightlog-off && test -e u2ac-led-off && test -e u2ac-bt-slowbaud && test -e u2ac-bt-0092 && test "$(cat u2ac-ffs-chunk)" = 512' \
+docker exec u2ac-selftest-web sh -c 'cd /run/persist && test -e u2ac-hfp-guard-off && test -e u2ac-flightlog-off && test -e u2ac-led-off && test -e u2ac-bt-slowbaud && test -e u2ac-bt-0092 && test -e u2ac-sleep-off && test "$(cat u2ac-ffs-chunk)" = 512' \
   && ok "web: options set their flags and the chunk size" || bad "web: option flags"
-L="settings options"; EXP='"opts":{"guard":"off","flightlog":"off","led":"off","btbaud":"slow","btpatch":"0092","usbchunk":512}'; chk "$U/cgi-bin/settings"
-for kv in guard:on flightlog:on led:on btbaud:fast btpatch:stock usbchunk:16384; do
+L="settings options"; EXP='"opts":{"guard":"off","flightlog":"off","led":"off","btbaud":"slow","btpatch":"0092","usbchunk":512,"sleep":"off"}'; chk "$U/cgi-bin/settings"
+for kv in guard:on flightlog:on led:on btbaud:fast btpatch:stock usbchunk:16384 sleep:on; do
   L="option back ${kv%%:*}"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=${kv%%:*}&value=${kv#*:}" "$A"
 done
-L="settings options default"; EXP='"opts":{"guard":"on","flightlog":"on","led":"on","btbaud":"fast","btpatch":"stock","usbchunk":16384}'; chk "$U/cgi-bin/settings"
+L="settings options default"; EXP='"opts":{"guard":"on","flightlog":"on","led":"on","btbaud":"fast","btpatch":"stock","usbchunk":16384,"sleep":"on"}'; chk "$U/cgi-bin/settings"
 L="option voice refused (needs MITM)"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=voice&value=on" "$A"
 L="option unknown key refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=u2ac-dev&value=on" "$A"
 L="option bad value refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=usbchunk&value=999" "$A"
@@ -167,6 +167,12 @@ for sc in car carncm computer dev; do
     && echo "$out" | grep -q '^metric: u2ac_radio_repairs_total{what="hostapd"} 2' \
     && { [ $carish = 0 ] || echo "$out" | grep -q '^metric: u2ac_aa_proxy_rss_bytes [0-9]'; } \
     && ok "health exporter: $sc" || { bad "health exporter: $sc"; echo "$out" | grep -- '--- metrics\|^metric:\|^BAD\|^DUP\|^OUTSIDE'; }
+  # car-off sleep: after a live session the car stops using the port -> radios off, aa-proxy-rs stopped, the
+  # port waits for a host (car modes only; maintenance/dev never sleep)
+  if [ $carish = 1 ]; then sw='sleeping=yes aa=stopped bt_off=1 udc=\[\] led=000000 wake=waiting'; sm='^u2ac_sleeping 1'
+  else sw='sleeping=no aa=stopped bt_off=0'; sm='^u2ac_sleeping 0'; fi
+  echo "$out" | grep -q -- '--- sleep session seen: [1-9]' && echo "$out" | grep -q -- "--- sleep: $sw" \
+    && echo "$out" | grep -q "$sm" && ok "car-off sleep: $sc" || { bad "car-off sleep: $sc"; echo "$out" | grep -- '--- sleep\|sleep:\|car-off\|u2ac_sleep'; }
   # radio watch: hostapd + bluetoothd killed, then wlan0 re-created: each repaired once, aa-proxy-rs restarted
   wa=0; [ $carish = 1 ] && wa=1
   echo "$out" | grep -q -- "--- watch: hostapd=1 bluetoothd=1 aa=$wa recreate=1 ix=7" \

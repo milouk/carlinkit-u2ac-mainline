@@ -57,7 +57,7 @@ mk /usr/bin/aa-proxy-rs 'echo "aa-proxy-rs AA_FFS_CHUNK=$AA_FFS_CHUNK AA_HFP_GUA
 mkdir -p /run/aa-etc /run/data
 # flight recorder: a fake 'rootfs' MTD (plain file, mtd.sh's MTD_SYS/MTD_DEV) = squashfs header with
 # bytes_used 10326016 (the r3 image) + erased flash; FL_ERASE writes 0xff; the saver's clock runs 25x fast
-export MTD_SYS=/fake/mtdsys MTD_DEV=/fake/mtddev U2AC_TICK=0.2 FL_ERASE=/fake/erase U2AC_WATCH_GAP=50
+export MTD_SYS=/fake/mtdsys MTD_DEV=/fake/mtddev U2AC_TICK=0.2 FL_ERASE=/fake/erase U2AC_WATCH_GAP=50 U2AC_SLEEP_S=50
 mkdir -p $MTD_SYS/mtd3 $MTD_DEV; echo rootfs > $MTD_SYS/mtd3/name; echo 12976128 > $MTD_SYS/mtd3/size
 echo 65536 > $MTD_SYS/mtd3/erasesize
 tr '\000' '\377' < /dev/zero | head -c 12976128 > $MTD_DEV/mtd3
@@ -128,3 +128,24 @@ sh /o/metricscheck.sh /tmp/metrics.txt
 grep -E '^u2ac_(boot_phase_seconds\{phase="bt"\}|process_up\{name="bluetoothd"\}|wifi_station_signal_dbm|wifi_channel |radio_repairs_total\{what="hostapd"\}|aa_proxy_rss_bytes)' /tmp/metrics.txt | sed 's/^/metric: /'
 echo "--- status:"; u2ac-aa status
 echo "--- persisted:"; ls -la /run/persist
+# car-off sleep (u2ac-aa car_sleep): a live AA session (a real TCP session on 5288 + the accessory gadget
+# configured), then the car stops using the port: after SLEEP_S the dongle sleeps in car mode (aa-proxy-rs
+# runs), never in maintenance/dev. U2AC_SLEEP_S=50 = 10 ticks = 2 s on the selftest clock.
+mkdir -p /sys/class/udc/ci_hdrc.0 /sys/kernel/config/usb_gadget/aatest; echo 0x2d00 > /sys/kernel/config/usb_gadget/aatest/idProduct
+echo ci_hdrc.0 > /sys/kernel/config/usb_gadget/aatest/UDC; echo configured > /sys/class/udc/ci_hdrc.0/state
+(sleep 600 | nc -l -p 5288 > /dev/null 2>&1) & ncl=$!   # stdin kept open: a background nc reads EOF and closes
+# the listener up (slow under emulation), then a client: ESTABLISHED on :14A8 (tcp or tcp6, as in_session reads it)
+est() { cat /proc/net/tcp /proc/net/tcp6 2> /dev/null | grep -c ':14A8 [0-9A-F:]* 01 '; }
+n=0; until [ "$(est)" -gt 0 ] || [ $n -ge 20 ]; do (sleep 600 | nc 127.0.0.1 5288) > /dev/null 2>&1 & ncc=$!; sleep 1; n=$((n + 1)); done
+echo "--- sleep session seen: $(est)"
+bt0=$(grep -c '^btmgmt -i hci0 power off' /run/stub.calls)
+# live = the light goes green (car_live); max 30 s
+L=/sys/class/leds/rgb:status; n=0; until [ "$(cat $L/color 2> /dev/null)" = 003b00 ] || [ $n -ge 60 ]; do sleep 0.5; n=$((n + 1)); done
+echo "--- sleep live light: $(cat $L/color 2> /dev/null)"
+kill $ncl $ncc 2> /dev/null; pkill -x nc 2> /dev/null
+echo suspended > /sys/class/udc/ci_hdrc.0/state
+n=0; until [ -e /run/u2ac-sleeping ] || [ $n -ge 40 ]; do sleep 0.5; n=$((n + 1)); done; sleep 1
+echo "--- sleep: sleeping=$([ -e /run/u2ac-sleeping ] && echo yes || echo no) aa=$(pgrep -x aa-proxy-rs > /dev/null && echo running || echo stopped) bt_off=$(( $(grep -c '^btmgmt -i hci0 power off' /run/stub.calls) - bt0 )) udc=[$(cat /sys/kernel/config/usb_gadget/aatest/UDC)] led=$(cat /sys/class/leds/rgb:status/color 2> /dev/null) wake=$([ -s /run/u2ac-wake.pid ] && kill -0 "$(cat /run/u2ac-wake.pid)" 2> /dev/null && echo waiting || echo none)"
+grep 'sleep:' /run/log/u2ac-aa.log | head -3
+u2ac-aa status | grep 'car-off sleep'
+u2ac-metrics | grep '^u2ac_sleep'

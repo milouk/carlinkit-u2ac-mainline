@@ -151,6 +151,17 @@ dry run (car / computer / dev). Must end `selftest: 0 failure(s)`.
   aa-build patch 0005 (wrap-up in the background), "BT: address set" stamp, hostapd -t timestamps.
 - Not ours: the phone's hotspot join (two associations per start in both logs) and SYNC's projection start.
 
+## Car-off sleep (u2ac-aa car_sleep; web Options "Sleep when the car is off", flag u2ac-sleep-off)
+- After a live AA session, once the car has not used the USB port (UDC not "configured") for 90 s
+  (`U2AC_SLEEP_S`) and no session runs: aa-proxy-rs stopped (no more Bluetooth calls pulling the phone onto
+  the hotspot), hostapd + udhcpd stopped, wlan0 down, BT controller powered off, light off, a flight-log slot
+  ("sleep"). The port then shows the boot's MTP-stage identity (board-rcS.sh `usbprobe_up 3600000 3000`): the
+  first host that configures it wakes the dongle by a reboot (car = AOA GET_PROTOCOL, computer = noaoa).
+- A car that is on but idle on USB for 90 s (the phone stayed away) also sleeps: it configures the probe at once,
+  so that costs one reboot. `u2ac-aa sleep-now` sleeps by hand. Status: `u2ac-aa status`, metric u2ac_sleeping.
+- Verified on the unit 2026-11-28 (RAM copy): sleep-now, mockhu saw 18d1:4ee1 at 3.7 s, GET_PROTOCOL -> reboot,
+  back in maintenance mode. Selftest: sleeps in car/carncm only. Power saved not measured yet (USB meter).
+
 ## Radio watch (u2ac-aa radio_watch, every 5 s in the saver loop; `u2ac-aa watch` runs one check by hand)
 - hostapd gone, or wlan0 re-created by brcmfmac's own crash reset (new ifindex) -> AP again (hostapd, address,
   DHCP, txpower). wlan0 missing 60 s -> the SDIO host 2190000.mmc is re-bound. bluetoothd/D-Bus gone -> started
