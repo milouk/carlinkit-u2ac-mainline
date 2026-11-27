@@ -141,6 +141,16 @@ car->dongle reads per max packet again (a car without zero-length packets stalle
 binaries load, boot slots under the RECOVERY busybox, web UI endpoints + auth + injection, `u2ac-aa start`
 dry run (car / computer / dev). Must end `selftest: 0 failure(s)`.
 
+## Start-up time (car runs, flight log; `u2ac-metrics` reports the same steps as u2ac_aa_event_seconds)
+- 2026-11-28 drive (rootfs 0cb82a90): car on the port at 2.4 s, radios 5.7, AP 8.9, BT up 12.1, aa-proxy-rs
+  first line 13.8, phone on Bluetooth 15.0 (1st try), phone on the hotspot 22.7 (7.3 s, 11.7 s the drive
+  before: phone side), Bluetooth wrap-up until 25.4, Android Auto data 27.2. SYNC waited ~24 s for the dongle.
+- Causes on our side: xz squashfs reads on the single core (bluetoothd 2.1 s cold / 0.3 s cached, aa-proxy-rs
+  2.2 s / 0.01 s; its 4.7 s pre-read lost the race), and aa-proxy-rs finishing the Bluetooth wrap-up (phone
+  disconnect ~2.4 s) before it starts USB. Fixes (rootfs 4b1bf7ae): D-Bus at once + the BT stack read first,
+  aa-build patch 0005 (wrap-up in the background), "BT: address set" stamp, hostapd -t timestamps.
+- Not ours: the phone's hotspot join (two associations per start in both logs) and SYNC's projection start.
+
 ## Radio watch (u2ac-aa radio_watch, every 5 s in the saver loop; `u2ac-aa watch` runs one check by hand)
 - hostapd gone, or wlan0 re-created by brcmfmac's own crash reset (new ifindex) -> AP again (hostapd, address,
   DHCP, txpower). wlan0 missing 60 s -> the SDIO host 2190000.mmc is re-bound. bluetoothd/D-Bus gone -> started

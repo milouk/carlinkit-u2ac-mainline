@@ -99,7 +99,8 @@ sz=$(wc -c < /run/log/big.log); last=$(tail -n 1 /run/log/big.log)
 echo "--- state2=$(cat /sys/devices/system/cpu/cpu0/cpuidle/state2/disable)"
 echo "--- known_devices: $(tr '\n' ' ' < /run/aa-etc/known_devices 2> /dev/null)"
 # flight recorder (car mode: aa-proxy-rs is ours): the 90 s trigger = tick 18 = ~4 s here
-case $SCEN in car | carncm) sleep 5 ;; esac
+# (waits for the slot, max 15 s: the fixed 5 s raced the slower emulated start once)
+case $SCEN in car | carncm) n=0; until [ -n "$(u2ac-aa flightlog 2> /dev/null | head -n 1)" ] || [ $n -ge 30 ]; do sleep 0.5; n=$((n + 1)); done ;; esac
 echo "--- flightlog list: $(u2ac-aa flightlog 2>&1 | head -n 1)"
 echo "--- flightlog last: $(u2ac-aa flightlog last 2>&1 | grep -c '^=== ')"
 [ "$(head -c 11927552 $MTD_DEV/mtd3 | md5sum | cut -d' ' -f1)" = "$SQ0" ] && echo "--- squashfs region intact" \
