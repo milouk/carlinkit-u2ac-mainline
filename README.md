@@ -20,18 +20,18 @@ dongle into a **wireless Android Auto adapter**: your phone connects to the dong
 and the dongle presents itself to the car as a wired Android Auto phone. The dongle's HAB-signed U-Boot is never
 modified. The new kernel goes in through the vendor's own kernel-staging path.
 
-> **Status: Android Auto runs in a real car (Ford SYNC 3), validation in progress.** On real hardware: boot,
-> Wi-Fi AP, Bluetooth, auto-reconnect to a paired Pixel, Android Auto on the car's screen, the status light,
-> persistence and recovery. Two car issues are fixed and wait for the next drive: the "USB device not
-> supported" message at plug-in (USB probe below) and incoming calls where the caller could not hear the driver
-> (a known SYNC 3 bug with in-band ringing, worked around by the hands-free guard below).
+> **Status: daily driving in a real car (Ford SYNC 3).** Confirmed in the car: boot, Wi-Fi AP, Bluetooth,
+> auto-reconnect to a paired Pixel, Android Auto on the car's screen, incoming and outgoing calls with a working
+> microphone (hands-free guard below), no "USB device not supported" message, the status light, persistence and
+> recovery. The car-off sleep and the faster start-up are tested on the bench and wait for their first drive.
 
 ## Features
 
-- **Wireless Android Auto** through [aa-proxy-rs](https://github.com/aa-proxy/aa-proxy-rs) v1.3.0 with four
+- **Wireless Android Auto** through [aa-proxy-rs](https://github.com/aa-proxy/aa-proxy-rs) v1.3.0 with five
   [patches](mainline/aa-build/patches): cars that ask the driver before switching (e.g. Ford SYNC 3) get time to
-  answer, head units that send no zero-length packets no longer stall, 16 KiB USB writes for video, and the
-  hands-free guard.
+  answer, head units that send no zero-length packets no longer stall, 16 KiB USB writes for video, the
+  hands-free guard, and the Bluetooth hand-off finishing in the background so the car gets USB about 2.5 s
+  sooner.
 - **USB to the car without out-of-tree code**: the Android Open Accessory handshake runs on mainline FunctionFS.
 - **Calls and microphone stay on the car's Bluetooth.** No call audio ever passes through the dongle.
 - **Hands-free guard**: the dongle stays connected to the phone as a second, silent hands-free device that tells
@@ -43,8 +43,20 @@ modified. The new kernel goes in through the vendor's own kernel-staging path.
 - **Car or computer, decided at boot**: in a car it starts Android Auto, and on a computer's USB port it stays in
   maintenance mode with USB networking (`ssh root@192.168.50.2`). The car never sees the USB network device, so
   it shows no "USB device not supported" message.
-- **Web UI** on the hotspot (`http://10.0.0.1`) and over USB: status, logs, Wi-Fi name and password, paired
-  phones, mode.
+- **Faster start-up**: D-Bus starts at once and the Bluetooth stack is read into memory while the radios load,
+  so Bluetooth is ready about 2.5 s sooner. Every start-up step is timestamped in the logs.
+- **Self-repair**: a watcher brings hostapd, bluetoothd and D-Bus back if they die, restarts the hotspot when
+  the Wi-Fi driver resets a crashed chip, and re-binds the Wi-Fi or Bluetooth chip if it drops off.
+- **Car-off sleep**: if the car keeps the USB port powered after a drive and stops using it for 90 s, the dongle
+  turns its radios off and stops calling the phone. The car wakes it again when it asks for Android Auto.
+- **Health metrics**: `http://10.0.0.1/cgi-bin/metrics` in Prometheus text format (start-up timings, the phone's
+  Wi-Fi join time, the car's accept time, temperature, CPU, Wi-Fi signal, daemons, repairs). No MAC addresses,
+  names or passwords in it. A copy goes into every flight-recorder slot.
+- **Web UI** on the hotspot (`http://10.0.0.1`) and over USB (`http://192.168.50.2`): status, logs (the flight
+  recorder too), Wi-Fi name and password, channel width (40 or 80 MHz), paired phones, startup mode, and
+  switches for the hands-free guard, flight recorder, status light, car-off sleep, USB transfer size and the
+  Bluetooth patch options. With mobile data on, a phone sends the browser over mobile data, so switch it off
+  briefly to open the page from the phone.
 - **Status light**: the stock WS2812B RGB LED driven by a small kernel module, in the vendor's colours.
 - **Flight recorder**: logs of each car run are kept in spare flash, so a failed drive can be diagnosed later at a
   computer (`u2ac-aa flightlog`).
