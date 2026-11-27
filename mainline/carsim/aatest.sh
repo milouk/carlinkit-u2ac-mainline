@@ -20,6 +20,16 @@ dmesg -c > /dev/null 2>&1
 FP=
 [ "${PHONE:-0}" = 1 ] || { ./fakephone 5299 2> fakephone.log & FP=$!; }
 echo "aatest: $(date) bin=$BIN dur=$DUR env: $*" > ctl.log
+# BT_LATE=N: bluetoothd stopped before aa-proxy-rs starts and back N s later, as at a car boot where the relay
+# starts before "BT up" (it retries the adapter every second); the radio watch is paused meanwhile
+if [ -n "${BT_LATE:-}" ]; then
+    mkdir -p /run/u2ac-watch; [ -e /run/u2ac-watch/off ] || : > /run/u2ac-watch/off.aatest; : > /run/u2ac-watch/off
+    kill "$(cat /run/bluetoothd.pid 2> /dev/null)" 2> /dev/null; sleep 1
+    echo "aatest: bluetoothd stopped at $(cut -d' ' -f1 /proc/uptime), back in $BT_LATE s" >> ctl.log
+    ( sleep "$BT_LATE"; : > /run/log/bluetoothd.log
+      ( /usr/libexec/bluetooth/bluetoothd -n >> /run/log/bluetoothd.log 2>&1 & echo $! > /run/bluetoothd.pid )
+      echo "aatest: bluetoothd started at $(cut -d' ' -f1 /proc/uptime)" >> "$T/ctl.log" ) &
+fi
 (cd /run/data && AA_FFS_CHUNK=${AA_FFS_CHUNK:-16384} exec "$BIN" -c "$T/config.toml" > /dev/null 2> "$T/stderr.log") &
 AP=$!
 # once a second: the gadget u2ac-aa's car_live reads (idProduct, UDC state), aa-proxy-rs memory, load
@@ -35,5 +45,6 @@ kill "$AP" 2> /dev/null; sleep 3; kill -9 "$AP" 2> /dev/null
 dmesg > dmesg.txt 2>&1
 cat /sys/class/udc/*/state > udc.txt 2>&1
 usb-mode ncm >> ctl.log 2>&1
+[ -e /run/u2ac-watch/off.aatest ] && rm -f /run/u2ac-watch/off /run/u2ac-watch/off.aatest
 echo "aatest: done $(date)" >> ctl.log
 : > done
