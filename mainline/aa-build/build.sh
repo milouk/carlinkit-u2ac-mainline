@@ -1,8 +1,8 @@
 #!/bin/sh
-# mainline/aa-build/build.sh <aa-proxy-rs git ref>  -> mainline/aa-build/out/aa-proxy-rs (static armv7 musl)
+# mainline/aa-build/build.sh [aa-proxy-rs git ref, default v1.3.0: the patches are made for it]  -> mainline/aa-build/out/aa-proxy-rs (static armv7 musl)
 set -eu
 OPT=${OPT:-s}
-D=$(cd "$(dirname "$0")" && pwd); REF=${1:-v1.2.0}
+D=$(cd "$(dirname "$0")" && pwd); REF=${1:-v1.3.0}
 docker build -q -t u2ac-aa-build "$D" >/dev/null
 mkdir -p "$D/out"
 docker run --rm -v u2ac-aa-src:/src -v u2ac-aa-cargo:/usr/local/cargo/registry -v "$D/out:/out" -v "$D/patches:/patches:ro" u2ac-aa-build sh -c "
