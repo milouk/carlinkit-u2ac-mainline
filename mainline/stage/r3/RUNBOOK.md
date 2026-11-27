@@ -161,9 +161,14 @@ dry run (car / computer / dev). Must end `selftest: 0 failure(s)`.
   15.7 MB aa-proxy-rs took another 2.75 s at 900 MHz. Now the image keeps it zstd-packed (board.env ZSTD_PACK,
   /usr/lib/zbin/aa-proxy-rs.zst 5.95 MB, /usr/bin/aa-proxy-rs -> /run/zbin) and u2ac-aa's zbin_unpack unpacks it
   first thing at boot with u2ac-unzstd (0.86 s): ~4.5 s -> ~3.0 s of CPU. Rootfs 11.04 MB (limit 11.93 MB).
+- NOR clock: the DT's 29 MHz is 24.75 MHz on the wire (99 MHz / 4). The NOR answers READ SFDP (rev 1.06):
+  MX25L12835F/45G class, not the SFDP-less 12805D its ID also matches, so READ (0x03, used without
+  m25p,fast-read) is rated to 50 MHz. Board module u2ac-qspi-boost sets 49.5 MHz (198 MHz / 4) from the start of
+  the boot until the relay is in RAM, then rmmod restores 24.75 MHz (all later writes at the old speed, recovery
+  never loads it). Bench (RAM): 3 full rootfs + kernel reads at 49.5 MHz, checksums equal to the flashed images,
+  rootfs read 4.73 s -> 2.87 s. Off: web Troubleshooting "Fast flash reads at boot" (u2ac-qspi-normal).
 - Not done: Thumb-2 build (-20% binary, only 0.25 s less xz, worse BCJ), CPU overclock (900 MHz = the top fused
-  grade, beyond is out of spec), NOR at 50 MHz / quad (kernel DT flash; chip id c22018 = MX25L12805D, no SFDP
-  exposed, quad unproven).
+  grade, beyond is out of spec), NOR quad mode (board wiring of IO2/IO3 unproven).
 
 ## Car-off sleep (u2ac-aa car_sleep; web Options "Sleep when the car is off", flag u2ac-sleep-off)
 - After a live AA session, once the car has not used the USB port (UDC not "configured") for 90 s

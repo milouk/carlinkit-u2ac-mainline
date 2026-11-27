@@ -93,16 +93,16 @@ L="width 40"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&a
 docker exec u2ac-selftest-web test ! -e /run/persist/u2ac-wifi-80 && ok "web: width 40 clears its flag" || bad "web: width 40 flag left"
 L="width refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=width&to=160" "$A"
 # the other options: each key flips its flag (or config.toml line), settings reports it, unknown ones are refused
-for kv in guard:off flightlog:off led:off btbaud:slow btpatch:0092 usbchunk:512 sleep:off; do
+for kv in guard:off flightlog:off led:off btbaud:slow btpatch:0092 usbchunk:512 sleep:off fastflash:off; do
   L="option ${kv%%:*} ${kv#*:}"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=${kv%%:*}&value=${kv#*:}" "$A"
 done
-docker exec u2ac-selftest-web sh -c 'cd /run/persist && test -e u2ac-hfp-guard-off && test -e u2ac-flightlog-off && test -e u2ac-led-off && test -e u2ac-bt-slowbaud && test -e u2ac-bt-0092 && test -e u2ac-sleep-off && test "$(cat u2ac-ffs-chunk)" = 512' \
+docker exec u2ac-selftest-web sh -c 'cd /run/persist && test -e u2ac-hfp-guard-off && test -e u2ac-flightlog-off && test -e u2ac-led-off && test -e u2ac-bt-slowbaud && test -e u2ac-bt-0092 && test -e u2ac-sleep-off && test -e u2ac-qspi-normal && test "$(cat u2ac-ffs-chunk)" = 512' \
   && ok "web: options set their flags and the chunk size" || bad "web: option flags"
-L="settings options"; EXP='"opts":{"guard":"off","flightlog":"off","led":"off","btbaud":"slow","btpatch":"0092","usbchunk":512,"sleep":"off"}'; chk "$U/cgi-bin/settings"
-for kv in guard:on flightlog:on led:on btbaud:fast btpatch:stock usbchunk:16384 sleep:on; do
+L="settings options"; EXP='"opts":{"guard":"off","flightlog":"off","led":"off","btbaud":"slow","btpatch":"0092","usbchunk":512,"sleep":"off","fastflash":"off"}'; chk "$U/cgi-bin/settings"
+for kv in guard:on flightlog:on led:on btbaud:fast btpatch:stock usbchunk:16384 sleep:on fastflash:on; do
   L="option back ${kv%%:*}"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=${kv%%:*}&value=${kv#*:}" "$A"
 done
-L="settings options default"; EXP='"opts":{"guard":"on","flightlog":"on","led":"on","btbaud":"fast","btpatch":"stock","usbchunk":16384,"sleep":"on"}'; chk "$U/cgi-bin/settings"
+L="settings options default"; EXP='"opts":{"guard":"on","flightlog":"on","led":"on","btbaud":"fast","btpatch":"stock","usbchunk":16384,"sleep":"on","fastflash":"on"}'; chk "$U/cgi-bin/settings"
 L="option voice refused (needs MITM)"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=voice&value=on" "$A"
 L="option unknown key refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=u2ac-dev&value=on" "$A"
 L="option bad value refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=usbchunk&value=999" "$A"
@@ -160,6 +160,10 @@ for sc in car carncm computer dev; do
      && echo "$out" | grep -q -- '--- known_devices: 11:22:33:44:55:66 ' \
      && echo "$out" | grep -q -- '--- flightlog guard: flight log: no area'; then ok "start dry run: $sc"
   else bad "start dry run: $sc"; echo "$out" | sed -n '/--- u2ac-aa.log/,/--- stub/p'; echo "$out" | grep -- '^--- \(flightlog\|squashfs\|led\|known\)'; fi
+  # the NOR boost: loaded at the start of the boot, removed once the relay is in RAM (every mode)
+  echo "$out" | grep -q '^insmod .*/u2ac-qspi-boost\.ko' && echo "$out" | grep -q '^rmmod u2ac_qspi_boost' \
+    && echo "$out" | grep -q 'flash: NOR at 49.5 MHz for the boot' && echo "$out" | grep -q 'flash: NOR clock back to normal' \
+    && ok "NOR boost for the boot only: $sc" || { bad "NOR boost: $sc"; echo "$out" | grep -E 'qspi|flash:'; }
   echo "$out" | grep -q -- "--- zbin: $AAMD5 done=yes" && ok "zstd-packed relay unpacked intact: $sc" \
     || { bad "zstd-packed relay: $sc"; echo "$out" | grep -- '--- zbin'; }
   # health exporter (u2ac-metrics): valid text, no MAC, the boot phases / daemons / station / repairs present

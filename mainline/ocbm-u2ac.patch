@@ -1478,6 +1478,80 @@ index 0000000..b87812c
 +CONFIG_NLS_CODEPAGE_437=y
 +CONFIG_NLS_ISO8859_1=y
 +CONFIG_NLS_UTF8=y
+diff --git a/baseline/arm-imx6ul-u2ac/modules/u2ac-qspi-boost/Kbuild b/baseline/arm-imx6ul-u2ac/modules/u2ac-qspi-boost/Kbuild
+new file mode 100644
+index 0000000..848e19f
+--- /dev/null
++++ b/baseline/arm-imx6ul-u2ac/modules/u2ac-qspi-boost/Kbuild
+@@ -0,0 +1 @@
++obj-m += u2ac-qspi-boost.o
+diff --git a/baseline/arm-imx6ul-u2ac/modules/u2ac-qspi-boost/u2ac-qspi-boost.c b/baseline/arm-imx6ul-u2ac/modules/u2ac-qspi-boost/u2ac-qspi-boost.c
+new file mode 100644
+index 0000000..9ddbc40
+--- /dev/null
++++ b/baseline/arm-imx6ul-u2ac/modules/u2ac-qspi-boost/u2ac-qspi-boost.c
+@@ -0,0 +1,61 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * u2ac-qspi-boost: the NOR's bus clock at 49.5 MHz while it is loaded (u2ac-aa loads it at the start of the
++ * boot and removes it when the boot's reads are done). The device tree asks fsl-qspi for 29 MHz, which the
++ * imx6ul clock tree gives as 24.75 MHz (99 MHz / 4): the boot reads the rootfs at ~2.3 MB/s.
++ *
++ * On imx6ul fsl-qspi runs the controller at 4x the bus rate and re-applies spi->max_speed_hz only when the
++ * chip select changes (one NOR here), so a rate set on its "qspi" clock holds for every following transfer.
++ * Unloading restores the old rate.
++ *
++ * Measured on the unit (2026-11-28): the NOR has SFDP rev 1.06 (MX25L12835F/45G class, not the SFDP-less
++ * MX25L12805D its ID also matches), so READ (0x03, what spi-nor uses without m25p,fast-read) is rated to
++ * 50 MHz and page program higher. At 49.5 MHz: 3 full reads of rootfs + kernel, all checksums equal to the
++ * flashed images, no errors; rootfs read 4.73 s -> 2.87 s.
++ */
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <linux/clk.h>
++#include <linux/device.h>
++
++static unsigned long bus_hz = 49500000;
++module_param(bus_hz, ulong, 0444);
++MODULE_PARM_DESC(bus_hz, "QSPI bus clock while loaded (the controller runs at 4x)");
++
++static struct clk *qclk;
++static unsigned long old_rate;
++
++static int __init boost_init(void)
++{
++	struct device *dev = bus_find_device_by_name(&platform_bus_type, NULL, "21e0000.spi");
++	int ret;
++
++	if (bus_hz > 50000000)
++		return -EINVAL;   /* the NOR's READ limit */
++	if (!dev)
++		return -ENODEV;
++	qclk = clk_get(dev, "qspi");
++	put_device(dev);
++	if (IS_ERR(qclk))
++		return PTR_ERR(qclk);
++	old_rate = clk_get_rate(qclk);
++	ret = clk_set_rate(qclk, bus_hz * 4);
++	if (ret) {
++		clk_put(qclk);
++		return ret;
++	}
++	pr_info("u2ac-qspi-boost: NOR bus %lu -> %lu Hz\n", old_rate / 4, clk_get_rate(qclk) / 4);
++	return 0;
++}
++
++static void __exit boost_exit(void)
++{
++	clk_set_rate(qclk, old_rate);
++	pr_info("u2ac-qspi-boost: NOR bus back to %lu Hz\n", clk_get_rate(qclk) / 4);
++	clk_put(qclk);
++}
++
++module_init(boost_init);
++module_exit(boost_exit);
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("U2AC: faster NOR reads during the boot");
 diff --git a/baseline/arm-imx6ul-u2ac/modules/u2ac-ws2812/Kbuild b/baseline/arm-imx6ul-u2ac/modules/u2ac-ws2812/Kbuild
 new file mode 100644
 index 0000000..22d8e05
@@ -203097,10 +203171,10 @@ index 0000000..8114b82
 \ No newline at end of file
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
 new file mode 100755
-index 0000000..16d9962
+index 0000000..c787102
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
-@@ -0,0 +1,881 @@
+@@ -0,0 +1,891 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# u2ac-aa start|stop|status|persist|aa-now|watch|dev on|off|aa|flightlog [last|SEQ]  (Carlinkit U2AC, milouk 2026-11-26)
@@ -203808,16 +203882,20 @@ index 0000000..16d9962
 +    : > "$LOG"
 +    say "start"
 +    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$g" 2>/dev/null; done
-+    # the image's zstd-packed executables (aa-proxy-rs) into RAM: ~3 s of work (5.95 MB off the 2.8 MB/s NOR +
-+    # 0.86 s of zstd) instead of ~4.5 s via the xz squashfs. Low priority: at full priority it held the radio
-+    # bring-up back by that much (radios up 7.7 s -> 11.0 s, the flash 2026-11-28); aa_run waits for it
-+    ( read -r me _ < /proc/self/stat; renice -n 10 -p "$me" > /dev/null 2>&1; zbin_unpack ) &
 +    echo 1 > /proc/sys/vm/overcommit_memory   # aa-proxy-rs reserves ~1 GiB of address space up front
 +    echo 4096 > /proc/sys/vm/min_free_kbytes  # keep atomic-allocation headroom for SDIO/USB/net (no compaction)
 +    mount -o remount,size=24m /tmp 2>/dev/null
 +    # rcS loads the persist archive in parallel with us (it writes /run/persist.loaded; ~0.1 s); max 10 s
 +    n=0; until [ -e /run/persist.loaded ] || [ $n -ge 200 ]; do sleep 0.05; n=$((n + 1)); done
++    # the boot reads the NOR at 49.5 MHz instead of the device tree's 24.75 MHz (u2ac-qspi-boost, tested on the
++    # unit: rootfs read 4.73 s -> 2.87 s, checksums equal); back to normal once the boot's reads are done (below).
++    # Recovery never loads it. Off: `: > /run/persist/u2ac-qspi-normal; persist save` (web Troubleshooting)
++    [ -e "$P/u2ac-qspi-normal" ] || { mod_fast u2ac_qspi_boost > /dev/null 2>&1 && say "flash: NOR at 49.5 MHz for the boot"; }
 +    mod_fast u2ac_ws2812 > /dev/null 2>&1 && led 7e172b
++    # the image's zstd-packed executables (aa-proxy-rs) into RAM: ~3 s of work (5.95 MB off the 2.8 MB/s NOR +
++    # 0.86 s of zstd) instead of ~4.5 s via the xz squashfs. Low priority: at full priority it held the radio
++    # bring-up back by that much (radios up 7.7 s -> 11.0 s, the flash 2026-11-28); aa_run waits for it
++    ( read -r me _ < /proc/self/stat; renice -n 10 -p "$me" > /dev/null 2>&1; zbin_unpack ) &
 +    # car or computer on USB: decided in parallel with the radios (its window no longer adds to the boot)
 +    rm -f /run/u2ac-usbhost
 +    # A car with NCM on the port (the probe could not tell: no AOA within 3 s) gets the port emptied at once,
@@ -203859,6 +203937,12 @@ index 0000000..16d9962
 +    fault=0
 +    if ap_up; then say "AP up"; else say "AP did not come up (/run/log/hostapd.log)"; fault=1; fi
 +    if wait $btp; then say "BT up"; else say "D-Bus/BlueZ did not start (/run/log/bluetoothd.log)"; fault=1; fi
++    # the boot's flash reads are done once the relay is in RAM too: the NOR back to the device tree's clock (the
++    # writes later in the run, persist and the flight recorder, keep the speed they were always tested at)
++    if mod_loaded u2ac_qspi_boost; then
++        ( n=0; until [ -e /run/zbin/.done ] || [ $n -ge 300 ]; do sleep 0.1; n=$((n + 1)); done
++          rmmod u2ac_qspi_boost 2> /dev/null && say "flash: NOR clock back to normal" ) &
++    fi
 +    if [ -e "$P/u2ac-dev" ]; then
 +        say "dev mode (forced): USB stays NCM (ssh root@192.168.50.2), aa-proxy-rs not started"
 +    elif [ ! -e "$P/u2ac-aa-force" ] && wait $cup && [ "$(cat /run/u2ac-usbhost 2> /dev/null)" = computer ]; then
@@ -205732,7 +205816,7 @@ index 0000000..b43d213
 +opt lease 86400
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md
 new file mode 100644
-index 0000000..00c8f5f
+index 0000000..cdbc467
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md
 @@ -0,0 +1,107 @@
@@ -205781,7 +205865,7 @@ index 0000000..00c8f5f
 +| `wifi` | `ssid`, `psk`, `alias` (each optional, empty keeps the current value) | Rewrites the first `  ssid = "…"`, `  wpa_passphrase = "…"` and `  btalias = "…"` lines of `/etc/aa-proxy-rs/config.toml`, writes `/run/persist/u2ac-wifi.conf`, then `u2ac-aa persist`. Applies after a reboot. |
 +| `forget` | `dev=AA:BB:CC:DD:EE:FF` or `dev=all` | `btmgmt -i hci0 unpair`, removes the device directory (and its `cache/` entry), then `u2ac-aa persist`. |
 +| `mode` | `to=auto`, `maintenance` or `aa` | `u2ac-aa dev off`, `dev on` or `dev aa` (from the next boot). |
-+| `opt` | `key`, `value` (only these pairs) | `guard` on/off (hands-free guard, flag `u2ac-hfp-guard-off`), `flightlog` on/off (`u2ac-flightlog-off`, at once), `sleep` on/off (car-off sleep, `u2ac-sleep-off`, at once), `led` on/off (`u2ac-led-off`, at once), `btbaud` fast/slow (`u2ac-bt-slowbaud`), `btpatch` stock/0092 (`u2ac-bt-0092`), `usbchunk` 512/1024/2048/4096/8192/16384 (`u2ac-ffs-chunk`, 16384 = default = no file). Then `u2ac-aa persist`. |
++| `opt` | `key`, `value` (only these pairs) | `guard` on/off (hands-free guard, flag `u2ac-hfp-guard-off`), `flightlog` on/off (`u2ac-flightlog-off`, at once), `sleep` on/off (car-off sleep, `u2ac-sleep-off`, at once), `fastflash` on/off (NOR at 49.5 MHz during the boot, `u2ac-qspi-normal`), `led` on/off (`u2ac-led-off`, at once), `btbaud` fast/slow (`u2ac-bt-slowbaud`), `btpatch` stock/0092 (`u2ac-bt-0092`), `usbchunk` 512/1024/2048/4096/8192/16384 (`u2ac-ffs-chunk`, 16384 = default = no file). Then `u2ac-aa persist`. |
 +| `width` | `to=40` or `80` | Creates or removes `/run/persist/u2ac-wifi-80`, then `u2ac-aa persist`. The hotspot runs at 80 MHz from the next boot only when the firmware offers VHT80 on channel 36. 40 MHz is the default. |
 +| `aa-now` | | `u2ac-aa aa-now`. |
 +| `reboot` | | `u2ac-aa persist`, then `reboot` 1 s after the reply. |
@@ -206037,10 +206121,10 @@ index 0000000..b88e822
 +}' "$V"
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/action b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/action
 new file mode 100755
-index 0000000..4561853
+index 0000000..cf9f7c6
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/action
-@@ -0,0 +1,193 @@
+@@ -0,0 +1,195 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# POST /cgi-bin/action (application/x-www-form-urlencoded), fields:
@@ -206199,6 +206283,8 @@ index 0000000..4561853
 +            M="Status light off."; WHEN=now ;;
 +        btbaud:fast) optflag u2ac-bt-slowbaud clear; M="Bluetooth firmware download at 3 Mbaud (the default)." ;;
 +        btbaud:slow) optflag u2ac-bt-slowbaud set; M="Bluetooth firmware download at 115200 baud." ;;
++        fastflash:on) optflag u2ac-qspi-normal clear; M="Fast flash reads at boot: on." ;;
++        fastflash:off) optflag u2ac-qspi-normal set; M="Fast flash reads at boot: off." ;;
 +        btpatch:stock) optflag u2ac-bt-0092 clear; M="Stock Bluetooth patch (0082, the default)." ;;
 +        btpatch:0092) optflag u2ac-bt-0092 set; M="Newer Bluetooth patch (0092)." ;;
 +        usbchunk:16384) optflag u2ac-ffs-chunk clear; M="USB transfers of 16384 bytes (the default)." ;;
@@ -206290,10 +206376,10 @@ index 0000000..51ed059
 +exec u2ac-metrics
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/settings b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/settings
 new file mode 100755
-index 0000000..3ba1e67
+index 0000000..14051e8
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/settings
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,67 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# GET /cgi-bin/settings -> current Wi-Fi name and channel width, Bluetooth name, paired phones, mode, what a reboot would
@@ -206333,6 +206419,7 @@ index 0000000..3ba1e67
 +OG=on; [ -e "$P/u2ac-hfp-guard-off" ] && OG=off
 +OF=on; [ -e "$P/u2ac-flightlog-off" ] && OF=off
 +OS=on; [ -e "$P/u2ac-sleep-off" ] && OS=off
++OQ=on; [ -e "$P/u2ac-qspi-normal" ] && OQ=off
 +OL=on; [ -e "$P/u2ac-led-off" ] && OL=off
 +OB=fast; [ -e "$P/u2ac-bt-slowbaud" ] && OB=slow
 +OP=stock; [ -e "$P/u2ac-bt-0092" ] && OP=0092
@@ -206340,8 +206427,8 @@ index 0000000..3ba1e67
 +case $OU in 512 | 1024 | 2048 | 4096 | 8192 | 16384) ;; *) OU=16384 ;; esac
 +
 +hdr
-+printf '{"ok":true,"opts":{"guard":"%s","flightlog":"%s","led":"%s","btbaud":"%s","btpatch":"%s","usbchunk":%s,"sleep":"%s"},' \
-+    "$OG" "$OF" "$OL" "$OB" "$OP" "$OU" "$OS"
++printf '{"ok":true,"opts":{"guard":"%s","flightlog":"%s","led":"%s","btbaud":"%s","btpatch":"%s","usbchunk":%s,"sleep":"%s","fastflash":"%s"},' \
++    "$OG" "$OF" "$OL" "$OB" "$OP" "$OU" "$OS" "$OQ"
 +printf '"wifi":{"ssid":%s,"live_ssid":%s,"override":%s,"width":{"set":%s,"live":%s,"vht80":%s}},"bt":{"alias":%s},"mode":"%s","pending_reboot":%s,"recovery":%s,"aaproxy_web":%s,"paired":[' \
 +    "$(jstr "$SSID")" "$(jstr "$LIVE")" "$OVR" "$WSET" "${WLIVE:-null}" "$V80" "$(jstr "$ALIAS")" "$MODE" "$PENDING" "$REC" "$(jstr "$WEBSRV")"
 +_sep=
@@ -206554,10 +206641,10 @@ index 0000000..4d93e02
 +fi
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/index.html b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/index.html
 new file mode 100644
-index 0000000..31dee4e
+index 0000000..50b2c23
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/index.html
-@@ -0,0 +1,507 @@
+@@ -0,0 +1,508 @@
 +<!doctype html>
 +<html lang="en">
 +<head>
@@ -206746,6 +206833,7 @@ index 0000000..31dee4e
 +  <div class="panel" id="opts2">
 +    <label class="opt"><input type="checkbox" data-key="btbaud" data-on="slow" data-off="fast" data-when="after a reboot"><b>Slow Bluetooth start</b><span class="sub">Loads the Bluetooth firmware at 115200 baud like the stock firmware. Only if Bluetooth does not come up.</span></label>
 +    <label class="opt"><input type="checkbox" data-key="btpatch" data-on="0092" data-off="stock" data-when="after a reboot"><b>Newer Bluetooth patch</b><span class="sub">Patch 0092 instead of the stock 0082. Experimental.</span></label>
++    <label class="opt"><input type="checkbox" data-key="fastflash" data-on="on" data-off="off" data-when="after a reboot"><b>Fast flash reads at boot</b><span class="sub">The flash chip at 49.5 MHz instead of 24.75 MHz while the dongle starts (back to normal after). Turn off if the dongle ever fails to start.</span></label>
 +  </div>
 +
 +  <h2>Paired phones</h2>

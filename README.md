@@ -44,8 +44,10 @@ modified. The new kernel goes in through the vendor's own kernel-staging path.
 - **Car or computer, decided at boot**: in a car it starts Android Auto, and on a computer's USB port it stays in
   maintenance mode with USB networking (`ssh root@192.168.50.2`). The car never sees the USB network device, so
   it shows no "USB device not supported" message.
-- **Faster start-up**: D-Bus starts at once and the Bluetooth stack is read into memory while the radios load,
-  so Bluetooth is ready about 2.5 s sooner. Every start-up step is timestamped in the logs.
+- **Faster start-up**: D-Bus starts at once and the Bluetooth stack is read into memory while the radios load.
+  The relay is stored zstd-packed and unpacked to RAM at boot, and starts before Bluetooth is up when a car is
+  on the port. The flash chip runs at 49.5 MHz instead of 24.75 MHz while the dongle boots (the chip is rated for
+  it, tested with checksums). Every start-up step is timestamped in the logs.
 - **Self-repair**: a watcher brings hostapd, bluetoothd and D-Bus back if they die, restarts the hotspot when
   the Wi-Fi driver resets a crashed chip, and re-binds the Wi-Fi or Bluetooth chip if it drops off.
 - **Car-off sleep**: if the car keeps the USB port powered after a drive and stops using it for 90 s, the dongle
