@@ -36,6 +36,8 @@ Back to stock (from recovery): restore mtd2 (kernel) from backup/pre_mainline_20
 from mtd3_stock_rootfs_2024.10.31.bin. Or the Pi SPI full-image path.
 
 ## Toggles after the install (persisted: `: > /run/persist/<flag>; persist save`, then reboot)
+All of these are on the web UI's Settings tab too (Wi-Fi channel width, Options, Troubleshooting), next to the
+Wi-Fi/Bluetooth names, paired phones and startup mode; the voice fix there sets `audio_max_unacked`.
 - `u2ac-bt-slowbaud`: download the BT patch at 115200 instead of the default 3 Mbaud (kernel patch 0007, as the stock
   firmware does it. ~5 s -> ~1 s). Use it if hci0 does not come up or `[uptime]` stamps show no gain.
 - `u2ac-bt-0092`: newer Nexus 6P BT patch instead of the stock 0082 (test LE + pairing).

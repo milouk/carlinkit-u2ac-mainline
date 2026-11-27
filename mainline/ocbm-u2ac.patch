@@ -205220,10 +205220,10 @@ index 0000000..b43d213
 +opt lease 86400
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md
 new file mode 100644
-index 0000000..fd8a6bf
+index 0000000..ddaced4
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,107 @@
 +# U2AC web UI
 +
 +A status and settings page for the dongle: one static `index.html` (inline CSS/JS, no external
@@ -205256,8 +205256,8 @@ index 0000000..fd8a6bf
 +| Endpoint | Method | What it returns or does |
 +|---|---|---|
 +| `cgi-bin/status` | GET | Dashboard object (polled every 3 s): `aa.state` (`off`, `waiting`, `connected`, `streaming`), `aa.last` (newest aa-proxy-rs log line), `mode.set` (`auto`, `dev`, `aa`) and `mode.active` (`aa`, `maint`), `svc.*` daemon booleans, `wifi` (ssid, channel, freq, width, txpower, `clients[]` with signal dBm, tx/rx bitrate, connected time, DHCP ip/host), `bt` (addr, name, powered, discoverable, paired count), `sys` (uptime, load, CPU kHz/max/governor, memory, `temp_mc` or null, build, kernel). |
-+| `cgi-bin/logs?src=S&n=N` | GET | Last N lines (20 to 500, default 200), ANSI codes stripped. S: `aa` (`/var/log/aa-proxy-rs.log`, falls back to `/run/log/aa-proxy-rs.console`), `svc` (`/run/log/u2ac-aa.log`), `hostapd`, `bt` (`/run/log/bluetoothd.log`), `web` (`/run/log/u2ac-web.log`, this UI's own change log), `dmesg`. |
-+| `cgi-bin/settings` | GET | Wi-Fi name (override, else config.toml, else hostapd.conf), the SSID the AP runs now, Bluetooth name, paired devices (`/var/lib/bluetooth/<adapter>/<device>/info`), startup mode, `pending_reboot`, whether `reboot-recovery` exists. Never the password. |
++| `cgi-bin/logs?src=S&n=N` | GET | Last N lines (20 to 500, default 200), ANSI codes stripped. S: `aa` (`/var/log/aa-proxy-rs.log`, falls back to `/run/log/aa-proxy-rs.console`), `svc` (`/run/log/u2ac-aa.log`), `hostapd`, `bt` (`/run/log/bluetoothd.log`), `web` (`/run/log/u2ac-web.log`, this UI's own change log), `dmesg`, `flight` (the flight recorder: its list, then the newest car run from its top, `u2ac-aa flightlog`). |
++| `cgi-bin/settings` | GET | Wi-Fi name (override, else config.toml, else hostapd.conf), the SSID the AP runs now, `wifi.width` (`set` 40 or 80, `live` MHz now, `vht80`: the firmware offers 80 MHz on channel 36), `opts` (every `opt` key's current value), Bluetooth name, paired devices (`/var/lib/bluetooth/<adapter>/<device>/info`), startup mode, `pending_reboot`, whether `reboot-recovery` exists. Never the password. |
 +| `cgi-bin/about` | GET | Versions (kernel, build, board, aa-proxy-rs, BlueZ, hostapd, iw, BusyBox; cached for the boot in `/run/u2ac-web/versions`) and cpufreq `time_in_state`. |
 +| `cgi-bin/token` | GET | The access code, when this request may see it (see Security). |
 +| `cgi-bin/action` | POST | Changes. Form-urlencoded body: `token=<code>&confirm=yes&action=<a>` plus fields below. |
@@ -205269,6 +205269,8 @@ index 0000000..fd8a6bf
 +| `wifi` | `ssid`, `psk`, `alias` (each optional, empty keeps the current value) | Rewrites the first `  ssid = "…"`, `  wpa_passphrase = "…"` and `  btalias = "…"` lines of `/etc/aa-proxy-rs/config.toml`, writes `/run/persist/u2ac-wifi.conf`, then `u2ac-aa persist`. Applies after a reboot. |
 +| `forget` | `dev=AA:BB:CC:DD:EE:FF` or `dev=all` | `btmgmt -i hci0 unpair`, removes the device directory (and its `cache/` entry), then `u2ac-aa persist`. |
 +| `mode` | `to=auto`, `maintenance` or `aa` | `u2ac-aa dev off`, `dev on` or `dev aa` (from the next boot). |
++| `opt` | `key`, `value` (only these pairs) | `guard` on/off (hands-free guard, flag `u2ac-hfp-guard-off`), `flightlog` on/off (`u2ac-flightlog-off`, at once), `led` on/off (`u2ac-led-off`, at once), `btbaud` fast/slow (`u2ac-bt-slowbaud`), `btpatch` stock/0092 (`u2ac-bt-0092`), `usbchunk` 512/1024/2048/4096/8192/16384 (`u2ac-ffs-chunk`, 16384 = default = no file), `voice` on/off (`audio_max_unacked` 1/0 in config.toml). Then `u2ac-aa persist`. |
++| `width` | `to=40` or `80` | Creates or removes `/run/persist/u2ac-wifi-80`, then `u2ac-aa persist`. The hotspot runs at 80 MHz from the next boot only when the firmware offers VHT80 on channel 36. 40 MHz is the default. |
 +| `aa-now` | | `u2ac-aa aa-now`. |
 +| `reboot` | | `u2ac-aa persist`, then `reboot` 1 s after the reply. |
 +| `recovery` | | Same with `reboot-recovery` (only if it is on PATH). |
@@ -205523,10 +205525,10 @@ index 0000000..b88e822
 +}' "$V"
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/action b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/action
 new file mode 100755
-index 0000000..0c9dbc2
+index 0000000..a5e56c6
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/action
-@@ -0,0 +1,139 @@
+@@ -0,0 +1,201 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# POST /cgi-bin/action (application/x-www-form-urlencoded), fields:
@@ -205645,6 +205647,68 @@ index 0000000..0c9dbc2
 +    weblog "mode -> $FV"
 +    ok "$M Applies from the next boot." true
 +    ;;
++width)
++    # the hotspot's channel width from the next boot: /run/persist/u2ac-wifi-80 (u2ac-aa ap_up uses the 80 MHz
++    # config only when the flag exists AND the Wi-Fi firmware offers VHT80 on channel 36)
++    field to
++    case $FV in
++        40) rm -f "$P/u2ac-wifi-80" || fail "could not change the setting" persist
++            M="Wi-Fi at 40 MHz (the default)." ;;
++        80) (umask 077; : > "$P/u2ac-wifi-80") || fail "could not change the setting" persist
++            M="Wi-Fi at 80 MHz." ;;
++        *) fail "unknown width" input ;;
++    esac
++    run u2ac-aa persist || fail "set for this boot, but writing the persistent store failed" persist
++    : > "$WEB/pending-reboot"
++    weblog "wifi width -> $FV MHz"
++    ok "$M It applies after a reboot." true
++    ;;
++opt)
++    # the dongle's other switches (persist flags read at boot or by the service, and one config.toml line):
++    # one key per request, only the keys and values listed here, anything else is refused
++    field key; K=$FV
++    field value; V=$FV
++    optflag() { # optflag FILE set|clear
++        if [ "$2" = set ]; then (umask 077; : > "$P/$1"); else rm -f "$P/$1"; fi \
++            || fail "could not change the setting" persist
++    }
++    WHEN=reboot
++    case $K:$V in
++        guard:on) optflag u2ac-hfp-guard-off clear; M="Hands-free guard on." ;;
++        guard:off) optflag u2ac-hfp-guard-off set; M="Hands-free guard off." ;;
++        flightlog:on) optflag u2ac-flightlog-off clear; M="Flight recorder on."; WHEN=now ;;
++        flightlog:off) optflag u2ac-flightlog-off set; M="Flight recorder off."; WHEN=now ;;
++        # on: lit again at once in its last colour (steady); its next state change restores the blink pattern
++        led:on) optflag u2ac-led-off clear; echo 255 > "$R/sys/class/leds/rgb:status/brightness" 2> /dev/null
++            M="Status light on."; WHEN=now ;;
++        led:off) optflag u2ac-led-off set; echo 0 > "$R/sys/class/leds/rgb:status/brightness" 2> /dev/null
++            M="Status light off."; WHEN=now ;;
++        btbaud:fast) optflag u2ac-bt-slowbaud clear; M="Bluetooth firmware download at 3 Mbaud (the default)." ;;
++        btbaud:slow) optflag u2ac-bt-slowbaud set; M="Bluetooth firmware download at 115200 baud." ;;
++        btpatch:stock) optflag u2ac-bt-0092 clear; M="Stock Bluetooth patch (0082, the default)." ;;
++        btpatch:0092) optflag u2ac-bt-0092 set; M="Newer Bluetooth patch (0092)." ;;
++        usbchunk:16384) optflag u2ac-ffs-chunk clear; M="USB transfers of 16384 bytes (the default)." ;;
++        usbchunk:512 | usbchunk:1024 | usbchunk:2048 | usbchunk:4096 | usbchunk:8192)
++            (umask 077; printf '%s\n' "$V" > "$P/u2ac-ffs-chunk") || fail "could not change the setting" persist
++            M="USB transfers of $V bytes." ;;
++        voice:on | voice:off)
++            [ -s "$AACFG" ] || fail "no aa-proxy-rs config at /etc/aa-proxy-rs/config.toml" config
++            NV=0; [ "$V" = on ] && NV=1
++            _new=$AACFG.web.$$
++            NV=$NV awk '!d && index($0, "  audio_max_unacked = ") == 1 { print "  audio_max_unacked = " ENVIRON["NV"]; d = 1; next }
++                { print } END { if (!d) exit 3 }' "$AACFG" > "$_new" \
++                || { rm -f "$_new"; fail "config.toml has no audio_max_unacked line to change" config; }
++            cmp -s "$_new" "$AACFG" || mv -f "$_new" "$AACFG" || { rm -f "$_new"; fail "could not write config.toml" config; }
++            rm -f "$_new"
++            if [ "$V" = on ]; then M="Voice command fix on (audio_max_unacked = 1)."; else M="Voice command fix off."; fi ;;
++        *) fail "unknown option or value" input ;;
++    esac
++    run u2ac-aa persist || fail "set for this boot, but writing the persistent store failed" persist
++    weblog "option $K -> $V"
++    [ $WHEN = now ] && ok "$M"
++    : > "$WEB/pending-reboot"
++    ok "$M It applies after a reboot." true
++    ;;
 +aa-now)
 +    run u2ac-aa aa-now || fail "could not start Android Auto" service
 +    weblog "aa-now"
@@ -205668,10 +205732,10 @@ index 0000000..0c9dbc2
 +esac
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/logs b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/logs
 new file mode 100755
-index 0000000..bc0798f
+index 0000000..1b8581f
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/logs
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,34 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# GET /cgi-bin/logs?src=aa|svc|hostapd|bt|web|dmesg&n=200 -> {"ok","src","file","lines":[...]}
@@ -205691,25 +205755,30 @@ index 0000000..bc0798f
 +    bt) F=$BTLOG ;;
 +    web) F=$WEBLOG ;;
 +    dmesg) F=dmesg ;;
++    flight) F=flight ;;
 +    *) SRC=aa F=$AALOG ;;
 +esac
 +
 +hdr
 +{
-+    if [ "$SRC" = dmesg ]; then dmesg 2> /dev/null | tail -n "$N"; else tail -n "$N" "$F" 2> /dev/null; fi
++    if [ "$SRC" = dmesg ]; then dmesg 2> /dev/null | tail -n "$N"
++    elif [ "$SRC" = flight ]; then
++        # the list, then the newest car run from its top (status, service log, then aa-proxy-rs's)
++        { u2ac-aa flightlog; echo; u2ac-aa flightlog last; } 2> /dev/null | head -n "$N"
++    else tail -n "$N" "$F" 2> /dev/null; fi
 +} | awk -v src="$SRC" -v f="${F#"$R"}" "$AWKLIB"'
 +BEGIN { printf "{\"ok\":true,\"src\":\"%s\",\"file\":%s,\"lines\":[", src, js(f) }
 +{ l = noansi($0); sub(/\r$/, "", l); sub(/^ +/, "", l); if (length(l) > 600) l = substr(l, 1, 600) "..."; printf "%s%s", (NR > 1 ? "," : ""), js(l) }
 +END { print "]}" }'
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/settings b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/settings
 new file mode 100755
-index 0000000..3b20986
+index 0000000..f384e8b
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/settings
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,66 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
-+# GET /cgi-bin/settings -> current Wi-Fi name, Bluetooth name, paired phones, mode, what a reboot would
++# GET /cgi-bin/settings -> current Wi-Fi name and channel width, Bluetooth name, paired phones, mode, what a reboot would
 +# change. The Wi-Fi password is never returned.
 +_d=${0%/*}; [ "$_d" = "$0" ] && _d=.
 +. "$_d/_lib.sh"
@@ -205733,10 +205802,30 @@ index 0000000..3b20986
 +[ -e "$P/u2ac-dev" ] && MODE=dev
 +REC=false
 +command -v reboot-recovery > /dev/null 2>&1 && REC=true
++# hotspot channel width: chosen (u2ac-wifi-80 flag), running now (iw info), and whether the firmware's locale
++# offers 80 MHz on channel 36 at all (without it the boot keeps 40 MHz whatever the flag says)
++WSET=40; [ -e "$P/u2ac-wifi-80" ] && WSET=80
++WLIVE=$(sed -n 's/.*width: \([0-9]*\) MHz.*/\1/p' "$WEB/iwinfo" 2> /dev/null | head -n 1)
++V80=false
++_phy=$(cat "$R/sys/class/net/$WIF/phy80211/name" 2> /dev/null)
++# (the locale does not change within a boot: the channel list is cached for an hour)
++[ -n "$_phy" ] && cache phych 3600 iw phy "$_phy" channels && grep -A3 '5180 MHz' "$WEB/phych" 2> /dev/null | grep -q VHT80 && V80=true
++
++# the other options (cgi-bin/action opt): flags in /run/persist, the voice fix in config.toml
++OG=on; [ -e "$P/u2ac-hfp-guard-off" ] && OG=off
++OF=on; [ -e "$P/u2ac-flightlog-off" ] && OF=off
++OL=on; [ -e "$P/u2ac-led-off" ] && OL=off
++OB=fast; [ -e "$P/u2ac-bt-slowbaud" ] && OB=slow
++OP=stock; [ -e "$P/u2ac-bt-0092" ] && OP=0092
++OU=16384; [ -s "$P/u2ac-ffs-chunk" ] && read -r OU < "$P/u2ac-ffs-chunk"
++case $OU in 512 | 1024 | 2048 | 4096 | 8192 | 16384) ;; *) OU=16384 ;; esac
++OV=off; [ "$(sed -n 's/^  audio_max_unacked = \([0-9]*\).*/\1/p' "$AACFG" 2> /dev/null | head -n 1)" = 1 ] && OV=on
 +
 +hdr
-+printf '{"ok":true,"wifi":{"ssid":%s,"live_ssid":%s,"override":%s},"bt":{"alias":%s},"mode":"%s","pending_reboot":%s,"recovery":%s,"aaproxy_web":%s,"paired":[' \
-+    "$(jstr "$SSID")" "$(jstr "$LIVE")" "$OVR" "$(jstr "$ALIAS")" "$MODE" "$PENDING" "$REC" "$(jstr "$WEBSRV")"
++printf '{"ok":true,"opts":{"guard":"%s","flightlog":"%s","led":"%s","btbaud":"%s","btpatch":"%s","usbchunk":%s,"voice":"%s"},' \
++    "$OG" "$OF" "$OL" "$OB" "$OP" "$OU" "$OV"
++printf '"wifi":{"ssid":%s,"live_ssid":%s,"override":%s,"width":{"set":%s,"live":%s,"vht80":%s}},"bt":{"alias":%s},"mode":"%s","pending_reboot":%s,"recovery":%s,"aaproxy_web":%s,"paired":[' \
++    "$(jstr "$SSID")" "$(jstr "$LIVE")" "$OVR" "$WSET" "${WLIVE:-null}" "$V80" "$(jstr "$ALIAS")" "$MODE" "$PENDING" "$REC" "$(jstr "$WEBSRV")"
 +_sep=
 +for _x in "$BTLIB"/*/[0-9A-F][0-9A-F]:??:??:??:??:??; do
 +    [ -d "$_x" ] || continue
@@ -205947,10 +206036,10 @@ index 0000000..4d93e02
 +fi
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/index.html b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/index.html
 new file mode 100644
-index 0000000..d4e5ebf
+index 0000000..ae88fe3
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/index.html
-@@ -0,0 +1,460 @@
+@@ -0,0 +1,507 @@
 +<!doctype html>
 +<html lang="en">
 +<head>
@@ -206089,7 +206178,7 @@ index 0000000..d4e5ebf
 +
 +<section id="t-logs" hidden>
 +  <div class="chips" id="srcs" role="group" aria-label="Log">
-+    <button data-src="aa" aria-pressed="true">Android Auto</button><button data-src="svc" aria-pressed="false">Service</button><button data-src="hostapd" aria-pressed="false">Hotspot</button><button data-src="bt" aria-pressed="false">Bluetooth</button><button data-src="dmesg" aria-pressed="false">Kernel</button><button data-src="web" aria-pressed="false">Web page</button>
++    <button data-src="aa" aria-pressed="true">Android Auto</button><button data-src="svc" aria-pressed="false">Service</button><button data-src="hostapd" aria-pressed="false">Hotspot</button><button data-src="bt" aria-pressed="false">Bluetooth</button><button data-src="dmesg" aria-pressed="false">Kernel</button><button data-src="web" aria-pressed="false">Web page</button><button data-src="flight" aria-pressed="false">Flight recorder</button>
 +  </div>
 +  <div class="tools"><input type="text" id="flt" placeholder="Filter lines" aria-label="Filter lines" autocomplete="off"><button class="btn" id="lref">Refresh</button></div>
 +  <pre id="log" tabindex="0"></pre>
@@ -206112,6 +206201,34 @@ index 0000000..d4e5ebf
 +    <input type="text" id="i-alias" maxlength="32" spellcheck="false"><div class="err" id="e-alias"></div>
 +    <div class="btns"><button class="btn pri" type="submit">Save Wi-Fi settings</button></div>
 +  </form>
++
++  <h2>Wi-Fi channel width</h2>
++  <form class="panel" id="f-width">
++    <label class="opt"><input type="radio" name="w" value="40"><b>40 MHz (recommended)</b><span class="sub">Plenty for Android Auto: about 300 Mbit/s for video that needs about 10. Less power and heat.</span></label>
++    <label class="opt"><input type="radio" name="w" value="80"><b>80 MHz</b><span class="sub">A faster link that Android Auto does not need. About 40 mA more, and more exposed to other networks on channels 36 to 48.</span></label>
++    <p class="sub" id="w-now"></p>
++    <div class="btns"><button class="btn" type="submit">Set channel width</button></div>
++  </form>
++
++  <h2>Options</h2>
++  <div class="panel" id="opts">
++    <label class="opt"><input type="checkbox" data-key="guard" data-on="on" data-off="off" data-when="after a reboot"><b>Hands-free guard (calls)</b><span class="sub">Keeps the car's in-band ringing off, so callers can hear you on Ford SYNC 3. Calls still go through the car.</span></label>
++    <label class="opt"><input type="checkbox" data-key="flightlog" data-on="on" data-off="off" data-when="now"><b>Flight recorder</b><span class="sub">Keeps the logs of each car run in spare flash. Read them on the Logs tab.</span></label>
++    <label class="opt"><input type="checkbox" data-key="led" data-on="on" data-off="off" data-when="now"><b>Status light</b><span class="sub">The coloured light. Off saves about 5 to 20 mA.</span></label>
++    <label class="opt"><input type="checkbox" data-key="voice" data-on="on" data-off="off" data-when="after a reboot"><b>Voice command fix</b><span class="sub">Try this if Google Assistant misses words in the car (audio_max_unacked = 1).</span></label>
++  </div>
++
++  <h2>Troubleshooting</h2>
++  <form class="panel" id="f-usb">
++    <label class="opt"><input type="radio" name="u" value="16384"><b>USB transfers: 16 KB (default)</b><span class="sub">Fastest for video.</span></label>
++    <label class="opt"><input type="radio" name="u" value="4096"><b>USB transfers: 4 KB</b><span class="sub">A middle step.</span></label>
++    <label class="opt"><input type="radio" name="u" value="512"><b>USB transfers: 512 bytes</b><span class="sub">For a car that keeps dropping or resetting the USB connection (seen on some VW group head units).</span></label>
++    <div class="btns"><button class="btn" type="submit">Set USB transfer size</button></div>
++  </form>
++  <div class="panel" id="opts2">
++    <label class="opt"><input type="checkbox" data-key="btbaud" data-on="slow" data-off="fast" data-when="after a reboot"><b>Slow Bluetooth start</b><span class="sub">Loads the Bluetooth firmware at 115200 baud like the stock firmware. Only if Bluetooth does not come up.</span></label>
++    <label class="opt"><input type="checkbox" data-key="btpatch" data-on="0092" data-off="stock" data-when="after a reboot"><b>Newer Bluetooth patch</b><span class="sub">Patch 0092 instead of the stock 0082. Experimental.</span></label>
++  </div>
 +
 +  <h2>Paired phones</h2>
 +  <div class="panel" id="devs"></div>
@@ -206268,7 +206385,7 @@ index 0000000..d4e5ebf
 +  if (document.hidden) return;
 +  get("status").then(s => { if (rebooting) { rebooting = false; toast("The dongle is back."); loadSettings(); } render(s); })
 +    .catch(() => {})
-+    .finally(() => { if (tab === "status" || rebooting) timer = setTimeout(poll, 3000); });
++    .finally(() => { if ((tab === "status" && !document.hidden) || rebooting) timer = setTimeout(poll, 3000); });
 +}
 +
 +/* ---------- logs ---------- */
@@ -206288,7 +206405,7 @@ index 0000000..d4e5ebf
 +  $("#lmeta").textContent = "Loading";
 +  get("logs?n=200&src=" + src).then(r => {
 +    logLines = r.lines || []; drawLog();
-+    $("#lmeta").textContent = "Last " + logLines.length + " lines of " + r.file + ", read at " + new Date().toLocaleTimeString() + ".";
++    $("#lmeta").textContent = (src === "flight" ? "First " : "Last ") + logLines.length + " lines of " + (src === "flight" ? "the flight recorder (its list, then the newest car run)" : r.file) + ", read at " + new Date().toLocaleTimeString() + ".";
 +  }).catch(() => { $("#lmeta").textContent = "The dongle did not answer. Try Refresh."; });
 +}
 +
@@ -206319,6 +206436,10 @@ index 0000000..d4e5ebf
 +    $("#i-ssid").value = c.wifi.ssid || ""; $("#i-alias").value = c.bt.alias || ""; $("#i-psk").value = "";
 +    $("#pend").hidden = !c.pending_reboot; $("#b-rec").hidden = !c.recovery;
 +    const m = {auto: "auto", dev: "maintenance", aa: "aa"}[c.mode]; $$("#f-mode input").forEach(r => r.checked = r.value === m);
++    const w = c.wifi.width || {}; $$("#f-width input").forEach(r => r.checked = r.value === String(w.set || 40));
++    const o = c.opts || {}; $$("input[data-key]").forEach(i => i.checked = String(o[i.dataset.key]) === i.dataset.on);
++    $$("#f-usb input").forEach(r => r.checked = r.value === String(o.usbchunk || 16384));
++    $("#w-now").textContent = (w.live ? "Running now: " + w.live + " MHz." : "") + (w.vht80 === false ? " This unit's Wi-Fi firmware does not offer 80 MHz, so it stays at 40." : "");
 +    const d = $("#devs"); d.replaceChildren();
 +    if (!c.paired.length) d.append(el("div", "empty", "No phone is paired. Pair one from the phone's Bluetooth settings: it lists the dongle as " + (c.bt.alias || "its Bluetooth name") + "."));
 +    for (const p of c.paired) {
@@ -206360,6 +206481,21 @@ index 0000000..d4e5ebf
 +  if (!okS || !okP || !okA) return;
 +  const prm = {action: "wifi", ssid: s}; if (p) prm.psk = p; if (a) prm.alias = a;
 +  act(prm, "Save the Wi-Fi settings?", "They apply after a reboot. Then your phone joins " + s + (p ? " with the new password" : "") + ", and you may need to pair it again if the Bluetooth name changed.", "Save");
++};
++$("#f-width").onsubmit = e => {
++  e.preventDefault();
++  const r = $("#f-width input:checked"); if (!r) return;
++  act({action: "width", to: r.value}, "Use " + r.value + " MHz?", r.value === "80" ? "It applies after a reboot. Android Auto gets no faster: its video needs far less than 40 MHz carries." : "It applies after a reboot.", "Set width");
++};
++$$("input[data-key]").forEach(i => i.onchange = () => {
++  const name = i.parentElement.querySelector("b").textContent, on = i.checked;
++  act({action: "opt", key: i.dataset.key, value: on ? i.dataset.on : i.dataset.off}, (on ? "Turn on " : "Turn off ") + name + "?",
++      "It applies " + i.dataset.when + ".", on ? "Turn on" : "Turn off").then(r => { if (!r || !r.ok) loadSettings(); });
++});
++$("#f-usb").onsubmit = e => {
++  e.preventDefault();
++  const r = $("#f-usb input:checked"); if (!r) return;
++  act({action: "opt", key: "usbchunk", value: r.value}, "Use USB transfers of " + r.value + " bytes?", "It applies after a reboot.", "Set size");
 +};
 +$("#f-mode").onsubmit = e => {
 +  e.preventDefault();

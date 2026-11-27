@@ -85,6 +85,27 @@ docker exec u2ac-selftest-web sh -c '[ "$(cat /etc/aa-proxy-rs/known_devices)" =
   && ok "web: forget also drops the phone from aa-proxy-rs known_devices" || bad "web: known_devices after forget"
 L="forget path traversal refused"; EXP='not a Bluetooth address'; chk -X POST --data-binary "token=$T&confirm=yes&action=forget&dev=..%2F..%2Fetc" "$A"
 L="mode"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&action=mode&to=maintenance" "$A"
+# Wi-Fi channel width: 80 sets the flag (and settings reports it), 40 clears it, anything else is refused
+L="width 80"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&action=width&to=80" "$A"
+docker exec u2ac-selftest-web test -e /run/persist/u2ac-wifi-80 && ok "web: width 80 sets its flag" || bad "web: width 80 flag missing"
+L="settings width 80"; EXP='"width":{"set":80,'; chk "$U/cgi-bin/settings"
+L="width 40"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&action=width&to=40" "$A"
+docker exec u2ac-selftest-web test ! -e /run/persist/u2ac-wifi-80 && ok "web: width 40 clears its flag" || bad "web: width 40 flag left"
+L="width refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=width&to=160" "$A"
+# the other options: each key flips its flag (or config.toml line), settings reports it, unknown ones are refused
+for kv in guard:off flightlog:off led:off btbaud:slow btpatch:0092 usbchunk:512 voice:on; do
+  L="option ${kv%%:*} ${kv#*:}"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=${kv%%:*}&value=${kv#*:}" "$A"
+done
+docker exec u2ac-selftest-web sh -c 'cd /run/persist && test -e u2ac-hfp-guard-off && test -e u2ac-flightlog-off && test -e u2ac-led-off && test -e u2ac-bt-slowbaud && test -e u2ac-bt-0092 && test "$(cat u2ac-ffs-chunk)" = 512 && grep -q "^  audio_max_unacked = 1$" /run/aa-etc/config.toml' \
+  && ok "web: options set their flags, the chunk size and the config.toml line" || bad "web: option flags"
+L="settings options"; EXP='"opts":{"guard":"off","flightlog":"off","led":"off","btbaud":"slow","btpatch":"0092","usbchunk":512,"voice":"on"}'; chk "$U/cgi-bin/settings"
+for kv in guard:on flightlog:on led:on btbaud:fast btpatch:stock usbchunk:16384 voice:off; do
+  L="option back ${kv%%:*}"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=${kv%%:*}&value=${kv#*:}" "$A"
+done
+L="settings options default"; EXP='"opts":{"guard":"on","flightlog":"on","led":"on","btbaud":"fast","btpatch":"stock","usbchunk":16384,"voice":"off"}'; chk "$U/cgi-bin/settings"
+L="option unknown key refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=u2ac-dev&value=on" "$A"
+L="option bad value refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=usbchunk&value=999" "$A"
+L="logs flight"; EXP='"src":"flight"'; chk "$U/cgi-bin/logs?n=20&src=flight"
 docker exec u2ac-selftest-web sh -c '[ ! -e /tmp/pwn ] && grep -q "^SSID=x;\$(touch /tmp/pwn)$" /run/persist/u2ac-wifi.conf' \
   && ok "web: injected text stored literally, never run" || bad "web: injection check"
 # with the hotspot password changed (the wifi test above), a new code goes to its first visitor again
