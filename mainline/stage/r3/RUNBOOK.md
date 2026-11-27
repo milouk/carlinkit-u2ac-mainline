@@ -88,6 +88,26 @@ Measured on the unit in RAM 2026-11-27: the Mac configures it after 224 ms, `noa
 A pyusb head unit got [2, 0] and the device left the bus 0.2 s later. Maintenance on a computer takes ~3.5 s
 longer than before.
 
+## Hands-free guard: incoming calls on SYNC 3 (aa-build patch 0004)
+Car test 2026-11-27: on an incoming call the caller could not hear the driver, outgoing calls were fine. The
+Pixel's own records (adb `dumpsys telecom`, `bluetooth_manager`) put every call on the car's hands-free link,
+never the dongle. The incoming one opened its audio link while still ringing (in-band ringing). SYNC 3's
+"Use Phone Ringtone" fixes it, but the car resets that setting every drive, and Android 17 dropped the
+developer option that turned in-band ringing off. Android's HeadsetService turns in-band ringing off for
+every hands-free device while more than one is connected (`updateInbandRinging`, `+BSIR: 0`). So after the
+Bluetooth bootstrap aa-proxy-rs (AA_HFP_GUARD=1, set by u2ac-aa) connects to the phone as a hands-free unit
+with no features and sends `AT+ANDROID=SINKAUDIOPOLICY,2,2,2`: never active, no calls, no in-band ringing.
+The phone stores that per device (seen in its database: call_establish, set_active_after_connection and
+in_band_ringtone all NOT_ALLOWED) and refuses to make the dongle the active device (ActiveDeviceManager
+`setHfpActiveDevice`), so calls stay on the car. No SCO listener on the dongle, so no audio can reach it.
+A phone that refuses the policy (older Android) is disconnected and left alone.
+- Log: `hfp-guard:` lines in aa-proxy-rs.log (flight log). With the car connected, `phone: +BSIR: 0` = in-band
+  ringing off. Status: `u2ac-aa status` (hands-free guard: on|off).
+- Off: `: > /run/persist/u2ac-hfp-guard-off; persist save`, then reboot.
+- Bench 2026-11-27 (real Pixel, carsim): connected 2.7 s after the bootstrap, policy accepted, `+BSIR: 0`.
+  After an AA session restart the phone resets the first 3 or 4 handshake attempts (it is still connected
+  through the guard), and the reconnect takes the same 15 s as without the guard.
+
 ## Flight recorder (car runs survive the ignition)
 Car mode writes the logs (u2ac-aa, aa-proxy-rs, bluetoothd, hostapd, dmesg, TCP/USB state) gzip'd into the last
 1 MiB of the rootfs MTD (8 slots x 128 KiB, oldest reused, squashfs bytes_used checked before every write):

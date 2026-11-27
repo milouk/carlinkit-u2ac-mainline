@@ -22,18 +22,22 @@ modified. The new kernel goes in through the vendor's own kernel-staging path.
 
 > **Status: Android Auto runs in a real car (Ford SYNC 3), validation in progress.** On real hardware: boot,
 > Wi-Fi AP, Bluetooth, auto-reconnect to a paired Pixel, Android Auto on the car's screen, the status light,
-> persistence and recovery. Open: during one call the other side could not hear the driver (call audio does not
-> pass through the dongle, so the cause is being narrowed down). The car's "USB device not supported" message at
-> plug-in is fixed in the current source (USB probe below) and waits for the next car test.
+> persistence and recovery. Two car issues are fixed and wait for the next drive: the "USB device not
+> supported" message at plug-in (USB probe below) and incoming calls where the caller could not hear the driver
+> (a known SYNC 3 bug with in-band ringing, worked around by the hands-free guard below).
 
 ## Features
 
-- **Wireless Android Auto** through [aa-proxy-rs](https://github.com/aa-proxy/aa-proxy-rs) v1.3.0 with three
+- **Wireless Android Auto** through [aa-proxy-rs](https://github.com/aa-proxy/aa-proxy-rs) v1.3.0 with four
   [patches](mainline/aa-build/patches): cars that ask the driver before switching (e.g. Ford SYNC 3) get time to
-  answer, head units that send no zero-length packets no longer stall, 16 KiB USB writes for video.
+  answer, head units that send no zero-length packets no longer stall, 16 KiB USB writes for video, and the
+  hands-free guard.
 - **USB to the car without out-of-tree code**: the Android Open Accessory handshake runs on mainline FunctionFS.
-- **Calls and microphone stay on the car's Bluetooth.** The dongle only uses Bluetooth to hand the phone its
-  Wi-Fi details and never keeps a hands-free link.
+- **Calls and microphone stay on the car's Bluetooth.** No call audio ever passes through the dongle.
+- **Hands-free guard**: the dongle stays connected to the phone as a second, silent hands-free device that tells
+  Android it must never take a call (Android's sink audio policy). With two hands-free devices connected, Android
+  turns in-band ringing off for the car. Ford SYNC 3 loses the microphone of incoming calls when the phone rings
+  in-band and the car is set to its own ringtone, and the car resets that setting every drive.
 - **Reconnects by itself**: every paired phone is dialled at boot. Pairings survive power cuts and are written to
   flash only when they change.
 - **Car or computer, decided at boot**: in a car it starts Android Auto, and on a computer's USB port it stays in

@@ -7,6 +7,8 @@ SCEN=${SCEN:-car}
 mkdir -p /run/persist /run/log /run/varlib /run/dropbear /fake
 : > /run/persist.loaded
 [ "$SCEN" = dev ] && : > /run/persist/u2ac-dev
+# the hands-free guard's off switch (car: on by default, carncm: switched off)
+[ "$SCEN" = carncm ] && : > /run/persist/u2ac-hfp-guard-off
 # a phone paired on an earlier boot (persisted link key): state_restore must put it in known_devices
 mkdir -p /run/persist/bluetooth/38:BA:B0:AA:BB:CC/11:22:33:44:55:66
 printf '[General]\nName=Pixel\n\n[LinkKey]\nKey=00112233445566778899AABBCCDDEEFF\nType=4\n' \
@@ -49,7 +51,7 @@ rm -f /usr/sbin/arping; mk /usr/sbin/arping 'echo "arping $*" >> /run/stub.calls
 [ "$SCEN" = computer ] && : > /run/computer
 : > /run/udhcpd-ncm.pid
 mk /usr/libexec/bluetooth/bluetoothd 'echo "bluetoothd $*" >> /run/stub.calls; sleep 1; echo "bluetoothd[9]: Bluetooth daemon 5.79"; echo "bluetoothd[9]: Bluetooth management interface 1.22 initialized"; sleep 600'
-mk /usr/bin/aa-proxy-rs 'echo "aa-proxy-rs AA_FFS_CHUNK=$AA_FFS_CHUNK cwd=$(pwd)" >> /run/stub.calls; sleep 600'
+mk /usr/bin/aa-proxy-rs 'echo "aa-proxy-rs AA_FFS_CHUNK=$AA_FFS_CHUNK AA_HFP_GUARD=${AA_HFP_GUARD:-unset} cwd=$(pwd)" >> /run/stub.calls; sleep 600'
 mkdir -p /run/aa-etc /run/data
 # flight recorder: a fake 'rootfs' MTD (plain file, mtd.sh's MTD_SYS/MTD_DEV) = squashfs header with
 # bytes_used 10326016 (the r3 image) + erased flash; FL_ERASE writes 0xff; the saver's clock runs 25x fast

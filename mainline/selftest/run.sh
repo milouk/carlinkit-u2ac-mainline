@@ -96,6 +96,11 @@ for sc in car carncm computer dev; do
   echo "$out" | grep -q -- "--- $usb" && echo "$out" | grep -q "usb probe: $pv (u2ac-usbprobe: test verdict $pv" \
     && { [ $sc != carncm ] || echo "$out" | grep -q 'USB: NCM off the port'; } \
     && ok "usb at boot: $sc (probe $pv)" || { bad "usb at boot: $sc"; echo "$out" | grep -- '--- ncm udc\|usb probe\|NCM off'; }
+  # the hands-free guard: on by default when aa-proxy-rs runs, off with its persist flag (carncm sets it)
+  case $sc in car) hg='AA_HFP_GUARD=1 ' hs=on;; carncm) hg='AA_HFP_GUARD=unset ' hs=off;; *) hg= hs=on;; esac
+  if [ -z "$hg" ] || echo "$out" | grep -q "^aa-proxy-rs AA_FFS_CHUNK=16384 $hg"; then
+    echo "$out" | grep -q "^hands-free guard: $hs" && ok "hands-free guard: $sc ($hs)" || bad "hands-free guard status: $sc"
+  else bad "hands-free guard env: $sc"; echo "$out" | grep '^aa-proxy-rs AA_FFS'; fi
   # every module after its dependencies (busybox modprobe got this wrong on the unit), the BD address set
   # (btmgmt answered), the status light in this mode's colour
   if echo "$out" | awk '/^insmod .*\/bluetooth\.ko/ { b = NR } /^insmod .*\/hci_uart\.ko bcm_force_early_baud=1/ { h = NR }

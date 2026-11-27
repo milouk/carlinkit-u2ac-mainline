@@ -8,10 +8,12 @@ mkdir -p "$D/out"
 docker run --rm -v u2ac-aa-src:/src -v u2ac-aa-cargo:/usr/local/cargo/registry -v "$D/out:/out" -v "$D/patches:/patches:ro" u2ac-aa-build sh -c "
   set -e
   [ -d /src/aa-proxy-rs/.git ] || git clone -q https://github.com/aa-proxy/aa-proxy-rs /src/aa-proxy-rs
-  cd /src/aa-proxy-rs && git fetch -q --tags origin && git checkout -q -f $REF && git log -1 --format='%h %cd %s'
+  # clean tree at REF: checkout -f resets tracked files, clean removes files a previous build's patches
+  # added (target/ is ignored, so it stays)
+  cd /src/aa-proxy-rs && git fetch -q --tags origin && git checkout -q -f $REF && git clean -qfd && git log -1 --format='%h %cd %s'
   sed -i 's|^openssl = { version = \"0.10\" }|openssl = { version = \"0.10\", features = [\"vendored\"] }|' Cargo.toml
   grep -q '^openssl = .*vendored' Cargo.toml
-  for p in /patches/*.patch; do [ -f \"\$p\" ] && git apply \"\$p\" && echo \"applied \${p##*/}\"; done
+  for p in /patches/*.patch; do [ -f \"\$p\" ] || continue; git apply \"\$p\" || { echo \"PATCH FAILED: \${p##*/}\"; exit 1; }; echo \"applied \${p##*/}\"; done
   # U2AC: rustls on ring only (ring is already linked); drops the aws-lc-rs backend (~MBs of C crypto)
   [ \"\${RUSTLS_RING:-1}\" = 1 ] && sed -i 's|^rustls = { version = \"0.23\" }|rustls = { version = \"0.23\", default-features = false, features = [\"ring\", \"std\", \"tls12\", \"logging\"] }|' Cargo.toml
   grep '^rustls = ' Cargo.toml
