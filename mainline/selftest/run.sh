@@ -155,6 +155,11 @@ for sc in car carncm computer dev; do
      && echo "$out" | grep -q -- '--- known_devices: 11:22:33:44:55:66 ' \
      && echo "$out" | grep -q -- '--- flightlog guard: flight log: no area'; then ok "start dry run: $sc"
   else bad "start dry run: $sc"; echo "$out" | sed -n '/--- u2ac-aa.log/,/--- stub/p'; echo "$out" | grep -- '^--- \(flightlog\|squashfs\|led\|known\)'; fi
+  # radio watch: hostapd + bluetoothd killed, then wlan0 re-created: each repaired once, aa-proxy-rs restarted
+  wa=0; [ $carish = 1 ] && wa=1
+  echo "$out" | grep -q -- "--- watch: hostapd=1 bluetoothd=1 aa=$wa recreate=1 ix=7" \
+    && echo "$out" | grep -q '^radio repairs this boot: hostapd=2 bluetoothd=1' \
+    && ok "radio watch: $sc" || { bad "radio watch: $sc"; echo "$out" | grep -- '--- watch\|watch:\|radio repairs'; }
 done
 
 # 5 the boot's USB probe hook (board_usb_probe) with a stand-in probe: return code (1 = no NCM from rcS), the

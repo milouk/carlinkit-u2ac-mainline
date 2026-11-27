@@ -141,6 +141,19 @@ car->dongle reads per max packet again (a car without zero-length packets stalle
 binaries load, boot slots under the RECOVERY busybox, web UI endpoints + auth + injection, `u2ac-aa start`
 dry run (car / computer / dev). Must end `selftest: 0 failure(s)`.
 
+## Radio watch (u2ac-aa radio_watch, every 5 s in the saver loop; `u2ac-aa watch` runs one check by hand)
+- hostapd gone, or wlan0 re-created by brcmfmac's own crash reset (new ifindex) -> AP again (hostapd, address,
+  DHCP, txpower). wlan0 missing 60 s -> the SDIO host 2190000.mmc is re-bound. bluetoothd/D-Bus gone -> started
+  again, then aa-proxy-rs restarted outside a session. hci0 missing 30 s -> serdev serial0-0 re-bound, the BD
+  address set after the kernel's 2 s auto power-off (set inside that window, mgmt lost the controller).
+- Each repair at most 8 times a boot, 30 s apart (`U2AC_WATCH_GAP` cs). Amber while a radio is down.
+  `: > /run/u2ac-watch/off` stops it for this boot. Repairs show in `u2ac-aa status` and the flight log.
+- Verified on the unit 2026-11-27 (RAM): hostapd killed (AP back in 4.4 s), brcmfmac unbind/bind (the re-probe
+  hung on the still-running chip, the 60 s SDIO host re-bind recovered it in 1.3 s, then AP again), bluetoothd
+  killed (back in 0.3 s), hci_uart_bcm unbind (back with its stable 38:BA:B0 address, twice).
+- Not covered: a chip that hangs without the kernel noticing (no crash mailbox, wlan0 stays); only the next
+  power cycle helps there.
+
 ## Known limits (reviewed 2026-11-27, not fixed on purpose)
 - Recovery is not left on its own within one power cycle: 3 boots in a row cut off before rcS marks them good
   (~5-6 s after power-on: the USB probe decided, then NCM + ssh up or no NCM) make the 4th boot a recovery

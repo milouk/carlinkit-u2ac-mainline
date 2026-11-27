@@ -32,7 +32,7 @@ export MODLOAD_PROC=/fake/modules MODLOAD_DIR=$(ls -d /lib/modules/*/ | head -n 
 log() { echo "$*" >> /run/stub.calls; }
 mk() { rm -f "$1"; printf '#!/bin/sh\n%s\n' "$2" > "$1"; chmod +x "$1"; }
 mk /usr/sbin/insmod 'echo "insmod $*" >> /run/stub.calls; n=${1##*/}; n=${n%%.ko*}; n=$(echo $n | tr - _); echo "$n 0 0 - Live 0x0" >> /fake/modules
-case $n in sdhci_esdhc_imx) (sleep 1; mkdir -p /sys/class/net/wlan0/phy80211; echo phy0 > /sys/class/net/wlan0/phy80211/name; echo 02:11:22:aa:bb:cc > /sys/class/net/wlan0/address) & ;;
+case $n in sdhci_esdhc_imx) (sleep 1; mkdir -p /sys/class/net/wlan0/phy80211; echo phy0 > /sys/class/net/wlan0/phy80211/name; echo 02:11:22:aa:bb:cc > /sys/class/net/wlan0/address; echo 3 > /sys/class/net/wlan0/ifindex) & ;;
 hci_uart) (sleep 2; mkdir -p /sys/class/bluetooth/hci0) & ;;
 u2ac_ws2812) L=/sys/class/leds/rgb:status; mkdir -p $L; for f in color trigger brightness delay_on delay_off; do : > $L/$f; done ;; esac'
 mk /usr/sbin/iw 'echo "iw $*" >> /run/stub.calls; case "$*" in *channels*) printf "* 5180 MHz [36]\n\t  Maximum TX power: 20.0 dBm\n\t  Channel widths: 20MHz HT40+ VHT80\n";; esac; exit 0'
@@ -55,7 +55,7 @@ mk /usr/bin/aa-proxy-rs 'echo "aa-proxy-rs AA_FFS_CHUNK=$AA_FFS_CHUNK AA_HFP_GUA
 mkdir -p /run/aa-etc /run/data
 # flight recorder: a fake 'rootfs' MTD (plain file, mtd.sh's MTD_SYS/MTD_DEV) = squashfs header with
 # bytes_used 10326016 (the r3 image) + erased flash; FL_ERASE writes 0xff; the saver's clock runs 25x fast
-export MTD_SYS=/fake/mtdsys MTD_DEV=/fake/mtddev U2AC_TICK=0.2 FL_ERASE=/fake/erase
+export MTD_SYS=/fake/mtdsys MTD_DEV=/fake/mtddev U2AC_TICK=0.2 FL_ERASE=/fake/erase U2AC_WATCH_GAP=50
 mkdir -p $MTD_SYS/mtd3 $MTD_DEV; echo rootfs > $MTD_SYS/mtd3/name; echo 12976128 > $MTD_SYS/mtd3/size
 echo 65536 > $MTD_SYS/mtd3/erasesize
 tr '\000' '\377' < /dev/zero | head -c 12976128 > $MTD_DEV/mtd3
@@ -107,5 +107,17 @@ printf '\000\000\300\000' | dd of=$MTD_DEV/mtd3 bs=1 seek=40 conv=notrunc 2> /de
 echo "--- flightlog guard: $(u2ac-aa flightlog 2>&1 | head -n 1)"
 L=/sys/class/leds/rgb:status; echo "--- led: color=$(cat $L/color 2>/dev/null) trigger=$(cat $L/trigger 2>/dev/null)"
 echo "--- ncm udc: [$(cat /sys/kernel/config/usb_gadget/baseline/UDC 2> /dev/null || echo none)] usbhost=$(cat /run/u2ac-usbhost)"
+# radio watch: hostapd and bluetoothd die, then brcmfmac re-creates wlan0 (new index): the saver loop brings
+# the AP and BlueZ back, and restarts aa-proxy-rs (when it runs) for the new bluetoothd
+cnt() { grep -c "$1" /run/stub.calls; }
+nh0=$(cnt '^hostapd -B'); nb0=$(cnt '^bluetoothd '); na0=$(cnt '^aa-proxy-rs AA_FFS')
+kill "$(cat /run/hostapd.pid)" "$(cat /run/bluetoothd.pid)"
+sleep 5
+nh1=$(cnt '^hostapd -B'); nb1=$(cnt '^bluetoothd '); na1=$(cnt '^aa-proxy-rs AA_FFS')
+echo 7 > /sys/class/net/wlan0/ifindex
+sleep 2
+nh2=$(cnt '^hostapd -B')
+echo "--- watch: hostapd=$((nh1 - nh0)) bluetoothd=$((nb1 - nb0)) aa=$((na1 - na0)) recreate=$((nh2 - nh1)) ix=$(cat /run/u2ac-watch/wlan0.ix)"
+grep 'watch:' /run/log/u2ac-aa.log
 echo "--- status:"; u2ac-aa status
 echo "--- persisted:"; ls -la /run/persist

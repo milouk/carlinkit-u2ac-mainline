@@ -203052,13 +203052,13 @@ index 0000000..8114b82
 \ No newline at end of file
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
 new file mode 100755
-index 0000000..d2d7a3d
+index 0000000..388883d
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
-@@ -0,0 +1,645 @@
+@@ -0,0 +1,776 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
-+# u2ac-aa start|stop|status|persist|aa-now|dev on|off|aa|flightlog [last|SEQ]  (Carlinkit U2AC, milouk 2026-11-26)
++# u2ac-aa start|stop|status|persist|aa-now|watch|dev on|off|aa|flightlog [last|SEQ]  (Carlinkit U2AC, milouk 2026-11-26)
 +# Wireless Android Auto on mainline: BCM4358 Wi-Fi (brcmfmac) + BT (hci_bcm), a 5 GHz AP, DHCP, D-Bus,
 +# BlueZ and aa-proxy-rs (aa-proxy/aa-proxy-rs v1.3.0, FunctionFS AOA gadget toward the car).
 +#  - Calls / microphone: aa-proxy-rs only bootstraps over Bluetooth (AA Wireless RFCOMM + a log-only HSP
@@ -203079,6 +203079,7 @@ index 0000000..d2d7a3d
 +. /lib/baseline/mtd.sh
 +P=/run/persist
 +LOG=/run/log/u2ac-aa.log
++WI=/run/u2ac-watch   # radio_watch's state (and `: > $WI/off` stops it for this boot, for tests by hand)
 +# cs: uptime in centiseconds (busybox date has 1 s resolution)
 +cs() { read -r _u _ < /proc/uptime; _c=${_u#*.}; echo $(( ${_u%.*} * 100 + ${_c#0} )); }
 +say() { _t=$(cut -d' ' -f1 /proc/uptime); echo "u2ac-aa: [$_t] $*"; echo "u2ac-aa: [$_t] $*" >> "$LOG"; }
@@ -203227,7 +203228,9 @@ index 0000000..d2d7a3d
 +    [ -e /sys/class/net/wlan0 ] && [ -e /sys/class/bluetooth/hci0 ]
 +}
 +
-+ap_up() {
++# ap_radio: hostapd on wlan0, the AP address and DHCP (ap_up at boot, radio_watch after a crash).
++# 0 = the AP is enabled, 1 = hostapd runs but did not report ENABLED within 15 s, 2 = hostapd did not start
++ap_radio() {
 +    ip link set wlan0 down 2>/dev/null
 +    # 40 MHz by default: AA video needs well under 50 Mbit/s and a 2x2 HT40/VHT40 AP gives ~300; 80 MHz costs
 +    # ~40 mA more just listening (CYW4354 figures, audit/ROUND2_POWER.md). Opt in: /run/persist/u2ac-wifi-80
@@ -203248,7 +203251,7 @@ index 0000000..d2d7a3d
 +    fi
 +    say "AP config ${HC##*/}"
 +    : > /run/log/hostapd.log
-+    hostapd -B -P /run/hostapd.pid -f /run/log/hostapd.log "$HC" || return 1
++    hostapd -B -P /run/hostapd.pid -f /run/log/hostapd.log "$HC" || return 2
 +    # ready = the control interface reports state=ENABLED (the -f log needs CONFIG_DEBUG_FILE, so it is
 +    # only for reading, never the readiness test); max 15 s. The IP, DHCP, web UI and ssh below come up
 +    # either way, so a slow 20/40 scan never leaves the AP without an address.
@@ -203264,6 +203267,14 @@ index 0000000..d2d7a3d
 +    ip addr add 10.0.0.1/24 dev wlan0 2>/dev/null
 +    ip link set wlan0 up
 +    udhcpd /usr/share/u2ac/udhcpd-wlan.conf
++    # the interface this AP runs on: brcmfmac re-creates wlan0 (a new index) when it resets a crashed chip
++    mkdir -p "$WI"; cat /sys/class/net/wlan0/ifindex > "$WI/wlan0.ix" 2> /dev/null
++    return $rc
++}
++
++ap_up() {
++    ap_radio; rc=$?
++    [ $rc = 2 ] && return 1
 +    # web UI (busybox httpd + CGI) on the AP, and on the USB link when a computer brought NCM up
 +    httpd -p 10.0.0.1:80 -h /usr/share/u2ac/www && echo "$(pgrep -n -x httpd)" > /run/httpd-wlan.pid
 +    usb_httpd
@@ -203285,7 +203296,9 @@ index 0000000..d2d7a3d
 +    return $rc
 +}
 +
-+bt_up() {
++bt_up() { bt_addr; bt_daemons; }
++
++bt_addr() {
 +    # stable public BD address, derived like the vendor did (38:BA:B0 + the Wi-Fi MAC's last 3 bytes)
 +    # (the sysfs hci0 node appears before the controller finishes its patch/setup: wait for mgmt to answer,
 +    # else public-addr fails silently and the chip default 43:58:A3:... stays)
@@ -203296,15 +203309,24 @@ index 0000000..d2d7a3d
 +    mg() { timeout 3 btmgmt -i hci0 "$@" <&9 2>/dev/null; }
 +    n=0; until mg info | grep -q 'current settings'; do
 +        [ $n -ge 40 ] && break; sleep 0.25; n=$((n + 1)); done
++    # bt_addr settle (radio_watch, after a re-bind): the controller answers ~1 s after the bind, then the kernel
++    # powers it off on its own 2 s later (auto-off); an address set in between left no controller in mgmt
++    # (seen twice on the unit). At boot the Wi-Fi load comes first and covers that window.
++    [ "${1:-}" = settle ] && sleep 3
 +    m=$(cat /sys/class/net/wlan0/address 2>/dev/null)
 +    [ -n "$m" ] && mg power off > /dev/null && mg public-addr "38:BA:B0:${m#??:??:??:}" > /dev/null
 +    exec 9<&-; rm -f /run/btmgmt.in
++}
++
++bt_daemons() {
 +    # a restart (stop, then start without a reboot): dbus-daemon refuses to start over its stale pid file
 +    pgrep -x dbus-daemon > /dev/null || { rm -f /run/dbus-daemon.pid; dbus-daemon --system --fork; } || return 1
 +    for d in dbus-daemon; do echo -500 > /proc/$(pgrep -n -x $d)/oom_score_adj 2>/dev/null; done
 +    : > /run/log/bluetoothd.log
-+    /usr/libexec/bluetooth/bluetoothd -n >> /run/log/bluetoothd.log 2>&1 &
-+    echo -500 > /proc/$!/oom_score_adj 2>/dev/null
++    # from a subshell that exits at once: init reaps it if it dies (a child of the long-running saver loop,
++    # radio_watch's restart, would stay a zombie and look alive to kill -0)
++    ( /usr/libexec/bluetooth/bluetoothd -n >> /run/log/bluetoothd.log 2>&1 & echo $! > /run/bluetoothd.pid )
++    echo -500 > /proc/$(cat /run/bluetoothd.pid)/oom_score_adj 2>/dev/null
 +    # ready when bluetoothd has taken the adapter ("Bluetooth management interface 1.x initialized"),
 +    # max 5 s; its failure line "Failed to access management interface" must not count as ready
 +    n=0; until grep -q 'management interface .* initialized' /run/log/bluetoothd.log 2>/dev/null; do
@@ -203392,6 +203414,108 @@ index 0000000..d2d7a3d
 +        done
 +    ) &
 +    echo $! > /run/aa-proxy-rs.pid
++}
++
++# The radios' daemons kept alive: radio_watch runs on every tick of the saver loop (5 s) and repairs
++#  - hostapd gone, or wlan0 re-created (brcmfmac resets a crashed chip itself: "Firmware has halted or
++#    crashed", then wlan0 goes and comes back with a new index, and the old hostapd is left on nothing)
++#    -> the AP again (hostapd, address, DHCP; the web UI and ssh listeners on 10.0.0.1 carry on)
++#  - wlan0 missing for 60 s (the kernel's own reset did not bring the chip back) -> the SDIO host re-bound
++#  - dbus-daemon or bluetoothd gone -> started again; aa-proxy-rs registered its Bluetooth profiles with the
++#    old ones, so it is restarted too, but only outside an AA session (its supervisor starts it at once)
++#  - hci0 missing for 30 s -> the Bluetooth serdev re-bound (the chip's own shutdown GPIO resets it)
++# Each repair at most 8 times a boot and 30 s apart. A device still down = amber, until it is back.
++# No forks while all is well (builtins only): it runs every 5 s for the whole drive.
++pid_ok() { { read -r _p < "$1"; } 2> /dev/null && [ -n "$_p" ] && kill -0 "$_p" 2> /dev/null; }
++# watch_try NAME: may NAME be repaired now? (counts it)
++watch_try() {
++    _n=0; _l=; { read -r _n < "$WI/$1.n"; read -r _l < "$WI/$1.t"; } 2> /dev/null
++    _now=$(cs)
++    if [ "${_n:-0}" -ge 8 ]; then
++        [ -e "$WI/$1.gaveup" ] || { : > "$WI/$1.gaveup"; say "watch: $1 repaired 8 times, giving up until the next boot"; }
++        return 1
++    fi
++    [ -n "$_l" ] && [ $((_now - _l)) -lt "${U2AC_WATCH_GAP:-3000}" ] && return 1
++    echo $((${_n:-0} + 1)) > "$WI/$1.n"; echo "$_now" > "$WI/$1.t"
++}
++# gone_for NAME CS: NAME has been missing for CS centiseconds (the first call starts its clock)
++gone_for() {
++    [ -s "$WI/$1.gone" ] || { cs > "$WI/$1.gone"; return 1; }
++    read -r _g < "$WI/$1.gone"; [ $(($(cs) - _g)) -ge "$2" ]
++}
++# watch_init: where to re-bind the chips if they drop off (the drivers' sysfs nodes, read once at boot)
++watch_init() {
++    mkdir -p "$WI"
++    _h=$(readlink -f /sys/class/net/wlan0/device 2> /dev/null | sed -n 's#^\(.*/[0-9a-f]*\.mmc\)/.*#\1#p')
++    [ -n "$_h" ] && [ -e "$_h/driver" ] && echo "$(readlink -f "$_h/driver") ${_h##*/}" > "$WI/wlan.host"
++    _b=$(readlink -f /sys/class/bluetooth/hci0/device 2> /dev/null)
++    [ -n "$_b" ] && [ -e "$_b/driver" ] && echo "$(readlink -f "$_b/driver") ${_b##*/}" > "$WI/bt.dev"
++}
++rebind() { # FILE (driver path + device name): unbind, then bind again
++    read -r _drv _dev < "$1" 2> /dev/null || return 1
++    echo "$_dev" > "$_drv/unbind" 2> /dev/null; sleep 1; echo "$_dev" > "$_drv/bind" 2> /dev/null
++}
++ap_again() {
++    for _f in /run/hostapd.pid /run/udhcpd-wlan.pid; do
++        pid_ok "$_f" && kill "$_p" 2> /dev/null; rm -f "$_f"
++    done
++    # hostapd's exit takes the AP down (max 3 s)
++    _n=0; while pgrep -x hostapd > /dev/null && [ $_n -lt 30 ]; do sleep 0.1; _n=$((_n + 1)); done
++    ap_radio
++}
++radio_watch() {
++    _bad=0
++    if [ ! -e /sys/class/net/wlan0 ]; then
++        _bad=1
++        if gone_for wlan0 6000 && watch_try wifi-rebind; then
++            say "watch: wlan0 gone for 60 s, re-binding the Wi-Fi chip's SDIO host"
++            pid_ok /run/hostapd.pid && kill "$_p" 2> /dev/null
++            rebind "$WI/wlan.host" || say "watch: no SDIO host to re-bind"
++            rm -f "$WI/wlan0.gone"
++        fi
++    else
++        rm -f "$WI/wlan0.gone"
++        _ix=; _ox=; { read -r _ix < /sys/class/net/wlan0/ifindex; read -r _ox < "$WI/wlan0.ix"; } 2> /dev/null
++        if ! pid_ok /run/hostapd.pid || [ "$_ix" != "$_ox" ]; then
++            _bad=1
++            if watch_try hostapd; then
++                if [ "$_ix" != "$_ox" ]; then say "watch: wlan0 re-created (index $_ox -> $_ix), AP again"
++                else say "watch: hostapd gone, AP again"; fi
++                ap_again; _r=$?
++                case $_r in 0) say "watch: AP up again"; _bad=0 ;; 1) say "watch: AP started, not enabled yet" ;;
++                    *) say "watch: hostapd did not start (/run/log/hostapd.log)" ;; esac
++            fi
++        fi
++    fi
++    if [ ! -e /sys/class/bluetooth/hci0 ]; then
++        _bad=1
++        if gone_for hci0 3000 && watch_try bt-rebind; then
++            say "watch: hci0 gone for 30 s, re-binding the Bluetooth chip"
++            pid_ok /run/bluetoothd.pid && kill "$_p" 2> /dev/null
++            if rebind "$WI/bt.dev"; then
++                _n=0; while [ ! -e /sys/class/bluetooth/hci0 ] && [ $_n -lt 100 ]; do sleep 0.1; _n=$((_n + 1)); done
++                [ -e /sys/class/bluetooth/hci0 ] && bt_addr settle
++            else say "watch: no Bluetooth device to re-bind"; fi
++            rm -f "$WI/hci0.gone"
++        fi
++    else
++        rm -f "$WI/hci0.gone"
++        if ! pid_ok /run/dbus-daemon.pid || ! pid_ok /run/bluetoothd.pid; then
++            _bad=1
++            if watch_try bluetoothd; then
++                say "watch: D-Bus/bluetoothd gone, starting them again"
++                pid_ok /run/bluetoothd.pid && kill "$_p" 2> /dev/null
++                mv -f /run/log/bluetoothd.log /run/log/bluetoothd.log.old 2> /dev/null
++                if bt_daemons; then say "watch: bluetoothd up again"; _bad=0; : > "$WI/aa-restart"
++                else say "watch: bluetoothd did not start (/run/log/bluetoothd.log)"; fi
++            fi
++        fi
++    fi
++    if [ -e "$WI/aa-restart" ] && ! in_session; then
++        rm -f "$WI/aa-restart"
++        pgrep -x aa-proxy-rs > /dev/null && { say "watch: restarting aa-proxy-rs for the new bluetoothd"; killall aa-proxy-rs; }
++    fi
++    return $_bad
 +}
 +
 +# cpu_mode session|normal. An AA session: full speed, and no LOW-POWER-IDLE (cpuidle state2 flushes L1+L2 on
@@ -203592,6 +203716,7 @@ index 0000000..d2d7a3d
 +                              cat /usr/bin/aa-proxy-rs > /dev/null ) &
 +    radio_up || { say "radio did not come up (dmesg)"; led 69480f 1000 500; return 1; }
 +    say "radios up"
++    watch_init
 +    state_restore
 +    # BT bring-up (D-Bus, bluetoothd) in parallel with the AP
 +    bt_up &
@@ -203620,13 +203745,15 @@ index 0000000..d2d7a3d
 +        # idle states carry whether aa-proxy-rs runs (idle1 cyan / idle0 white): the light follows it when it is
 +        # started or stopped outside a session (aa-now, a test run), not only at session changes
 +        ar() { pgrep -x aa-proxy-rs > /dev/null && echo 1 || echo 0; }
-+        m=normal; k=0; lit=idle$(ar); [ $fault = 1 ] && lit=fault; bk=$(bt_key); live=0; fl_at=18; fl_sz=
++        m=normal; k=0; lit=idle$(ar); [ $fault = 1 ] && lit=fault; bk=$(bt_key); live=0; fl_at=18; fl_sz=; wf=0
 +        while :; do
 +            sleep "${U2AC_TICK:-5}"; k=$((k + 1))   # U2AC_TICK: the selftest's fast clock
++            # the radios' daemons (radio_watch): wf = something is down right now
++            wf=0; [ -e "$WI/off" ] || radio_watch || wf=1
 +            if in_session; then [ $m = session ] || { m=session; cpu_mode session; }
 +            elif [ $m = session ]; then m=normal; cpu_mode normal; fi
 +            # a start-up fault (radio/AP/BT) stays amber until a phone session shows things work after all
-+            if car_live; then st=live; elif [ $m = session ]; then st=phone; elif [ $fault = 1 ]; then st=fault
++            if car_live; then st=live; elif [ $m = session ]; then st=phone; elif [ $fault = 1 ] || [ $wf = 1 ]; then st=fault
 +            else st=idle$(ar); fi
 +            [ $st = live ] && fault=0
 +            if [ $st != $lit ]; then
@@ -203658,7 +203785,7 @@ index 0000000..d2d7a3d
 +
 +stop() {
 +    for f in /run/u2ac-saver.pid /run/aa-proxy-rs.pid /run/hostapd.pid /run/udhcpd-wlan.pid /run/dropbear-wlan.pid \
-+             /run/httpd-wlan.pid /run/httpd-usb.pid; do
++             /run/httpd-wlan.pid /run/httpd-usb.pid /run/bluetoothd.pid; do
 +        [ -s "$f" ] && kill "$(cat "$f")" 2>/dev/null; rm -f "$f"
 +    done
 +    killall aa-proxy-rs bluetoothd dbus-daemon httpd 2>/dev/null
@@ -203690,7 +203817,11 @@ index 0000000..d2d7a3d
 +        else echo "mode: auto ($(pgrep -x aa-proxy-rs > /dev/null && echo android-auto || echo maintenance))"; fi
 +        echo "usb at boot: probe $(cat /run/u2ac-usbprobe 2> /dev/null || echo -), host $(cat /run/u2ac-usbhost 2> /dev/null || echo -)"
 +        echo "hands-free guard: $([ -e "$P/u2ac-hfp-guard-off" ] && echo off || echo on)"
++        _r=; for _x in hostapd wifi-rebind bluetoothd bt-rebind; do
++            [ -s "$WI/$_x.n" ] && _r="$_r $_x=$(cat "$WI/$_x.n")"; done
++        echo "radio repairs this boot:${_r:- none}$([ -e "$WI/off" ] && echo ' (watch off)')"
 +        ;;
++    watch) mkdir -p "$WI"; [ -s "$WI/wlan.host" ] || watch_init; radio_watch && echo "radios ok" || { echo "a radio is down (see $LOG)"; exit 1; } ;;
 +    dev)
 +        case ${2:-} in
 +            on) rm -f "$P/u2ac-aa-force"; : > "$P/u2ac-dev" && state_save force && echo "dev mode forced on (after reboot: USB = NCM always)" ;;
@@ -203699,7 +203830,7 @@ index 0000000..d2d7a3d
 +            *) echo "usage: u2ac-aa dev on|off|aa" >&2; exit 2 ;;
 +        esac
 +        ;;
-+    *) echo "usage: u2ac-aa start|stop|status|persist|aa-now|dev on|off|aa|flightlog [last|SEQ]" >&2; exit 2 ;;
++    *) echo "usage: u2ac-aa start|stop|status|persist|aa-now|watch|dev on|off|aa|flightlog [last|SEQ]" >&2; exit 2 ;;
 +esac
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/wifi-connect b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/wifi-connect
 new file mode 100755
