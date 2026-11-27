@@ -205220,7 +205220,7 @@ index 0000000..b43d213
 +opt lease 86400
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md
 new file mode 100644
-index 0000000..ddaced4
+index 0000000..202d9a2
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md
 @@ -0,0 +1,107 @@
@@ -205269,7 +205269,7 @@ index 0000000..ddaced4
 +| `wifi` | `ssid`, `psk`, `alias` (each optional, empty keeps the current value) | Rewrites the first `  ssid = "…"`, `  wpa_passphrase = "…"` and `  btalias = "…"` lines of `/etc/aa-proxy-rs/config.toml`, writes `/run/persist/u2ac-wifi.conf`, then `u2ac-aa persist`. Applies after a reboot. |
 +| `forget` | `dev=AA:BB:CC:DD:EE:FF` or `dev=all` | `btmgmt -i hci0 unpair`, removes the device directory (and its `cache/` entry), then `u2ac-aa persist`. |
 +| `mode` | `to=auto`, `maintenance` or `aa` | `u2ac-aa dev off`, `dev on` or `dev aa` (from the next boot). |
-+| `opt` | `key`, `value` (only these pairs) | `guard` on/off (hands-free guard, flag `u2ac-hfp-guard-off`), `flightlog` on/off (`u2ac-flightlog-off`, at once), `led` on/off (`u2ac-led-off`, at once), `btbaud` fast/slow (`u2ac-bt-slowbaud`), `btpatch` stock/0092 (`u2ac-bt-0092`), `usbchunk` 512/1024/2048/4096/8192/16384 (`u2ac-ffs-chunk`, 16384 = default = no file), `voice` on/off (`audio_max_unacked` 1/0 in config.toml). Then `u2ac-aa persist`. |
++| `opt` | `key`, `value` (only these pairs) | `guard` on/off (hands-free guard, flag `u2ac-hfp-guard-off`), `flightlog` on/off (`u2ac-flightlog-off`, at once), `led` on/off (`u2ac-led-off`, at once), `btbaud` fast/slow (`u2ac-bt-slowbaud`), `btpatch` stock/0092 (`u2ac-bt-0092`), `usbchunk` 512/1024/2048/4096/8192/16384 (`u2ac-ffs-chunk`, 16384 = default = no file). Then `u2ac-aa persist`. |
 +| `width` | `to=40` or `80` | Creates or removes `/run/persist/u2ac-wifi-80`, then `u2ac-aa persist`. The hotspot runs at 80 MHz from the next boot only when the firmware offers VHT80 on channel 36. 40 MHz is the default. |
 +| `aa-now` | | `u2ac-aa aa-now`. |
 +| `reboot` | | `u2ac-aa persist`, then `reboot` 1 s after the reply. |
@@ -205525,10 +205525,10 @@ index 0000000..b88e822
 +}' "$V"
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/action b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/action
 new file mode 100755
-index 0000000..a5e56c6
+index 0000000..442d31c
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/action
-@@ -0,0 +1,201 @@
+@@ -0,0 +1,191 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# POST /cgi-bin/action (application/x-www-form-urlencoded), fields:
@@ -205664,7 +205664,7 @@ index 0000000..a5e56c6
 +    ok "$M It applies after a reboot." true
 +    ;;
 +opt)
-+    # the dongle's other switches (persist flags read at boot or by the service, and one config.toml line):
++    # the dongle's other switches (persist flags read at boot or by the service):
 +    # one key per request, only the keys and values listed here, anything else is refused
 +    field key; K=$FV
 +    field value; V=$FV
@@ -205691,16 +205691,6 @@ index 0000000..a5e56c6
 +        usbchunk:512 | usbchunk:1024 | usbchunk:2048 | usbchunk:4096 | usbchunk:8192)
 +            (umask 077; printf '%s\n' "$V" > "$P/u2ac-ffs-chunk") || fail "could not change the setting" persist
 +            M="USB transfers of $V bytes." ;;
-+        voice:on | voice:off)
-+            [ -s "$AACFG" ] || fail "no aa-proxy-rs config at /etc/aa-proxy-rs/config.toml" config
-+            NV=0; [ "$V" = on ] && NV=1
-+            _new=$AACFG.web.$$
-+            NV=$NV awk '!d && index($0, "  audio_max_unacked = ") == 1 { print "  audio_max_unacked = " ENVIRON["NV"]; d = 1; next }
-+                { print } END { if (!d) exit 3 }' "$AACFG" > "$_new" \
-+                || { rm -f "$_new"; fail "config.toml has no audio_max_unacked line to change" config; }
-+            cmp -s "$_new" "$AACFG" || mv -f "$_new" "$AACFG" || { rm -f "$_new"; fail "could not write config.toml" config; }
-+            rm -f "$_new"
-+            if [ "$V" = on ]; then M="Voice command fix on (audio_max_unacked = 1)."; else M="Voice command fix off."; fi ;;
 +        *) fail "unknown option or value" input ;;
 +    esac
 +    run u2ac-aa persist || fail "set for this boot, but writing the persistent store failed" persist
@@ -205772,10 +205762,10 @@ index 0000000..1b8581f
 +END { print "]}" }'
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/settings b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/settings
 new file mode 100755
-index 0000000..f384e8b
+index 0000000..ce61b11
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/settings
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,65 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# GET /cgi-bin/settings -> current Wi-Fi name and channel width, Bluetooth name, paired phones, mode, what a reboot would
@@ -205811,7 +205801,7 @@ index 0000000..f384e8b
 +# (the locale does not change within a boot: the channel list is cached for an hour)
 +[ -n "$_phy" ] && cache phych 3600 iw phy "$_phy" channels && grep -A3 '5180 MHz' "$WEB/phych" 2> /dev/null | grep -q VHT80 && V80=true
 +
-+# the other options (cgi-bin/action opt): flags in /run/persist, the voice fix in config.toml
++# the other options (cgi-bin/action opt): flags in /run/persist
 +OG=on; [ -e "$P/u2ac-hfp-guard-off" ] && OG=off
 +OF=on; [ -e "$P/u2ac-flightlog-off" ] && OF=off
 +OL=on; [ -e "$P/u2ac-led-off" ] && OL=off
@@ -205819,11 +205809,10 @@ index 0000000..f384e8b
 +OP=stock; [ -e "$P/u2ac-bt-0092" ] && OP=0092
 +OU=16384; [ -s "$P/u2ac-ffs-chunk" ] && read -r OU < "$P/u2ac-ffs-chunk"
 +case $OU in 512 | 1024 | 2048 | 4096 | 8192 | 16384) ;; *) OU=16384 ;; esac
-+OV=off; [ "$(sed -n 's/^  audio_max_unacked = \([0-9]*\).*/\1/p' "$AACFG" 2> /dev/null | head -n 1)" = 1 ] && OV=on
 +
 +hdr
-+printf '{"ok":true,"opts":{"guard":"%s","flightlog":"%s","led":"%s","btbaud":"%s","btpatch":"%s","usbchunk":%s,"voice":"%s"},' \
-+    "$OG" "$OF" "$OL" "$OB" "$OP" "$OU" "$OV"
++printf '{"ok":true,"opts":{"guard":"%s","flightlog":"%s","led":"%s","btbaud":"%s","btpatch":"%s","usbchunk":%s},' \
++    "$OG" "$OF" "$OL" "$OB" "$OP" "$OU"
 +printf '"wifi":{"ssid":%s,"live_ssid":%s,"override":%s,"width":{"set":%s,"live":%s,"vht80":%s}},"bt":{"alias":%s},"mode":"%s","pending_reboot":%s,"recovery":%s,"aaproxy_web":%s,"paired":[' \
 +    "$(jstr "$SSID")" "$(jstr "$LIVE")" "$OVR" "$WSET" "${WLIVE:-null}" "$V80" "$(jstr "$ALIAS")" "$MODE" "$PENDING" "$REC" "$(jstr "$WEBSRV")"
 +_sep=
@@ -206036,10 +206025,10 @@ index 0000000..4d93e02
 +fi
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/index.html b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/index.html
 new file mode 100644
-index 0000000..ae88fe3
+index 0000000..0798a22
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/index.html
-@@ -0,0 +1,507 @@
+@@ -0,0 +1,506 @@
 +<!doctype html>
 +<html lang="en">
 +<head>
@@ -206215,7 +206204,6 @@ index 0000000..ae88fe3
 +    <label class="opt"><input type="checkbox" data-key="guard" data-on="on" data-off="off" data-when="after a reboot"><b>Hands-free guard (calls)</b><span class="sub">Keeps the car's in-band ringing off, so callers can hear you on Ford SYNC 3. Calls still go through the car.</span></label>
 +    <label class="opt"><input type="checkbox" data-key="flightlog" data-on="on" data-off="off" data-when="now"><b>Flight recorder</b><span class="sub">Keeps the logs of each car run in spare flash. Read them on the Logs tab.</span></label>
 +    <label class="opt"><input type="checkbox" data-key="led" data-on="on" data-off="off" data-when="now"><b>Status light</b><span class="sub">The coloured light. Off saves about 5 to 20 mA.</span></label>
-+    <label class="opt"><input type="checkbox" data-key="voice" data-on="on" data-off="off" data-when="after a reboot"><b>Voice command fix</b><span class="sub">Try this if Google Assistant misses words in the car (audio_max_unacked = 1).</span></label>
 +  </div>
 +
 +  <h2>Troubleshooting</h2>

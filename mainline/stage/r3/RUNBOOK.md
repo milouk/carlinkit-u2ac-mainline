@@ -37,7 +37,7 @@ from mtd3_stock_rootfs_2024.10.31.bin. Or the Pi SPI full-image path.
 
 ## Toggles after the install (persisted: `: > /run/persist/<flag>; persist save`, then reboot)
 All of these are on the web UI's Settings tab too (Wi-Fi channel width, Options, Troubleshooting), next to the
-Wi-Fi/Bluetooth names, paired phones and startup mode; the voice fix there sets `audio_max_unacked`.
+Wi-Fi/Bluetooth names, paired phones and startup mode.
 - `u2ac-bt-slowbaud`: download the BT patch at 115200 instead of the default 3 Mbaud (kernel patch 0007, as the stock
   firmware does it. ~5 s -> ~1 s). Use it if hci0 does not come up or `[uptime]` stamps show no gain.
 - `u2ac-bt-0092`: newer Nexus 6P BT patch instead of the stock 0082 (test LE + pairing).
@@ -46,7 +46,8 @@ Wi-Fi/Bluetooth names, paired phones and startup mode; the voice fix there sets 
 - `u2ac-led-off`: status light dark (the WS2812B draws ~5-20 mA lit).
 - `u2ac-ffs-chunk` (contents 512..16384): USB transfer size toward the car. 16384 default. A head unit that
   drops/re-powers USB in a loop (VAG reports, aa-proxy-rs #131/#144): `echo 512 > /run/persist/u2ac-ffs-chunk`.
-- Field notes (ROUND2_AA_SOFTWARE.md): voice commands drop words -> try `audio_max_unacked = 1` in config.toml.
+- `audio_max_unacked` (the "voice commands drop words" tweak) only acts with `mitm = true`. Our build runs aa-proxy-rs
+  in passthrough (no head-unit certificates), so it is a no-op here and is not offered in the web UI.
   Confirm `iw reg get` shows GR. Never let aa-proxy-rs generate hostapd.conf (its template has TKIP = 54 Mbps cap).
 Web UI: http://10.0.0.1 (AP) or http://192.168.50.2 (USB). aa-proxy-rs's own UI (no login, has shell-command
 settings) listens on 127.0.0.1:8080 only: `ssh -L 8080:127.0.0.1:8080 root@10.0.0.1`, then http://localhost:8080.

@@ -93,16 +93,17 @@ L="width 40"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&a
 docker exec u2ac-selftest-web test ! -e /run/persist/u2ac-wifi-80 && ok "web: width 40 clears its flag" || bad "web: width 40 flag left"
 L="width refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=width&to=160" "$A"
 # the other options: each key flips its flag (or config.toml line), settings reports it, unknown ones are refused
-for kv in guard:off flightlog:off led:off btbaud:slow btpatch:0092 usbchunk:512 voice:on; do
+for kv in guard:off flightlog:off led:off btbaud:slow btpatch:0092 usbchunk:512; do
   L="option ${kv%%:*} ${kv#*:}"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=${kv%%:*}&value=${kv#*:}" "$A"
 done
-docker exec u2ac-selftest-web sh -c 'cd /run/persist && test -e u2ac-hfp-guard-off && test -e u2ac-flightlog-off && test -e u2ac-led-off && test -e u2ac-bt-slowbaud && test -e u2ac-bt-0092 && test "$(cat u2ac-ffs-chunk)" = 512 && grep -q "^  audio_max_unacked = 1$" /run/aa-etc/config.toml' \
-  && ok "web: options set their flags, the chunk size and the config.toml line" || bad "web: option flags"
-L="settings options"; EXP='"opts":{"guard":"off","flightlog":"off","led":"off","btbaud":"slow","btpatch":"0092","usbchunk":512,"voice":"on"}'; chk "$U/cgi-bin/settings"
-for kv in guard:on flightlog:on led:on btbaud:fast btpatch:stock usbchunk:16384 voice:off; do
+docker exec u2ac-selftest-web sh -c 'cd /run/persist && test -e u2ac-hfp-guard-off && test -e u2ac-flightlog-off && test -e u2ac-led-off && test -e u2ac-bt-slowbaud && test -e u2ac-bt-0092 && test "$(cat u2ac-ffs-chunk)" = 512' \
+  && ok "web: options set their flags and the chunk size" || bad "web: option flags"
+L="settings options"; EXP='"opts":{"guard":"off","flightlog":"off","led":"off","btbaud":"slow","btpatch":"0092","usbchunk":512}'; chk "$U/cgi-bin/settings"
+for kv in guard:on flightlog:on led:on btbaud:fast btpatch:stock usbchunk:16384; do
   L="option back ${kv%%:*}"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=${kv%%:*}&value=${kv#*:}" "$A"
 done
-L="settings options default"; EXP='"opts":{"guard":"on","flightlog":"on","led":"on","btbaud":"fast","btpatch":"stock","usbchunk":16384,"voice":"off"}'; chk "$U/cgi-bin/settings"
+L="settings options default"; EXP='"opts":{"guard":"on","flightlog":"on","led":"on","btbaud":"fast","btpatch":"stock","usbchunk":16384}'; chk "$U/cgi-bin/settings"
+L="option voice refused (needs MITM)"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=voice&value=on" "$A"
 L="option unknown key refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=u2ac-dev&value=on" "$A"
 L="option bad value refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=usbchunk&value=999" "$A"
 L="logs flight"; EXP='"src":"flight"'; chk "$U/cgi-bin/logs?n=20&src=flight"
