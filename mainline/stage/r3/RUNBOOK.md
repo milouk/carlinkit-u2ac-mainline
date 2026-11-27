@@ -65,9 +65,28 @@ two-read + U-Boot identity checks, read-back verify). Tested against a fake flas
 ## Status light (WS2812B on GPIO1_IO03, module u2ac-ws2812, /sys/class/leds/rgb:status)
 Stock colours (2024.10.31 /etc/rgbLight.conf): purple steady = starting. Cyan blink 500/100 = Android Auto
 waiting for the phone. Blue blink 300/100 = the phone is in (AA TCP up), the car has not switched to Android
-Auto yet. Green blink 1000/1000 = the car took the accessory (AA on its screen). Amber blink 1000/500 = fault
+Auto yet. Green steady = the car took the accessory and AA is on its screen. Stock blinks it 1000/1000, which
+read as "still connecting" in the car, so it is steady since 2026-11-27. Amber blink 1000/500 = fault
 (radio, AP or BT did not come up: /run/log/u2ac-aa.log). Dim white steady = maintenance (computer on USB, or
 dev mode). By hand: `echo 7f0000 > /sys/class/leds/rgb:status/color` (RRGGBB), `brightness` 0..255, `trigger` timer.
+
+## USB at boot: car or computer (u2ac-usbprobe)
+Car test 2026-11-27 (flight log): NCM was on the port from 2 s to 30 s, until aa-proxy-rs took it once the
+phone was in, and SYNC 3 said "USB device not supported" for it. Now rcS's board hook (board-rcS.sh
+board_usb_probe) first shows aa-proxy-rs's own MTP-stage identity (18d1:4ee1, bcdDevice 0x3008, "aa-proxy",
+serial 0123456), served by u2ac-usbprobe (arm-imx6ul-u2ac/tools/u2ac-usbprobe.c, FunctionFS). A head unit asks
+it AOA GET_PROTOCOL at once (SYNC 3: 33 ms after SET_CONFIGURATION), a computer never does. Verdict in
+/run/u2ac-usbprobe, also in `u2ac-aa status` and the flight log:
+- `car`: answered 2, port emptied 0.2 s later, no NCM this boot. The car next sees the MTP stage when the
+  phone is in.
+- `noaoa` (configured, 3 s silent): NCM as before and u2ac-aa's carrier/ARP test. A car there (one that waits
+  for the driver before AOA) gets NCM taken off the port at once.
+- `none` (nobody configured it within 4 s: a car still booting): rcS goes on without NCM, the probe keeps the
+  port until 10 s. A late host is then a car (`car`) or gets NCM (`noaoa`, `/run/u2ac-usbprobe.how` = noaoa-late).
+- `dev` (dev mode) or `failed` (the probe could not run): NCM exactly as before.
+Measured on the unit in RAM 2026-11-27: the Mac configures it after 224 ms, `noaoa` at 3.2 s, NCM back.
+A pyusb head unit got [2, 0] and the device left the bus 0.2 s later. Maintenance on a computer takes ~3.5 s
+longer than before.
 
 ## Flight recorder (car runs survive the ignition)
 Car mode writes the logs (u2ac-aa, aa-proxy-rs, bluetoothd, hostapd, dmesg, TCP/USB state) gzip'd into the last

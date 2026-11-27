@@ -2047,10 +2047,10 @@ index 0000000..f1ec3a7
 \ No newline at end of file
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/etc/baseline/board-rcS.sh b/baseline/arm-imx6ul-u2ac/rootfs/etc/baseline/board-rcS.sh
 new file mode 100644
-index 0000000..e7f6a70
+index 0000000..3a4262d
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/etc/baseline/board-rcS.sh
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,120 @@
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# i.MX6ULL hooks for common/rootfs/etc/init.d/rcS. LEDs (gpio-leds, pins and polarity from LIVI's DTS;
 +# on hardware UNVERIFIED for the baseline), as `led` documents them:
@@ -2078,6 +2078,98 @@ index 0000000..e7f6a70
 +    # U2AC (2026-11-26): the red LED is the vendor's power LED (on = powered, like stock), so it stays on.
 +    # Wireless Android Auto starts whether or not NCM came up (in the car nothing is on the NCM side).
 +    [ "$1" = 1 ] || echo "rcS: NCM/SSH not up (Android Auto was started from board_early anyway)"
++}
++
++# U2AC (2026-11-27): car or computer on the USB port BEFORE NCM, so a car never sees the NCM gadget (Ford
++# SYNC 3: "USB device not supported" at every plug-in). The port shows aa-proxy-rs's own MTP-stage identity
++# (an Android phone) served by u2ac-usbprobe (tools/u2ac-usbprobe.c); a head unit asks it AOA GET_PROTOCOL at
++# once, a computer never does. Verdict in /run/u2ac-usbprobe, read by u2ac-aa:
++#   car    -> no NCM; the port stays empty until aa-proxy-rs presents Android Auto (phone in)
++#   noaoa  -> NCM as before (a computer, or a car that waits for the driver: u2ac-aa's NCM test decides)
++#   none   -> nobody configured the port within 4 s: no NCM now; the probe keeps the port until ~10 s for a
++#             host that comes later (a car still booting: car; a computer: NCM is brought up then)
++#   dev / missing -> NCM as before (dev mode, or the probe could not start: never worse than before)
++# Returns 1 when rcS must not bring NCM up (car, or nobody yet), 0 for NCM.
++UPG=/sys/kernel/config/usb_gadget/u2acprobe UPF=/run/u2ac-probe UPO=/run/u2ac-usbprobe.out
++usbprobe_up() {
++    _u=; _n=0
++    while [ -z "$_u" ] && [ $_n -lt 30 ]; do
++        for _d in /sys/class/udc/*; do
++            case $(readlink -f "$_d") in */"${NCM_UDC_MATCH:-}"*) _u=${_d##*/}; break ;; esac
++        done
++        [ -n "$_u" ] || { sleep 0.1; _n=$((_n + 1)); }
++    done
++    [ -n "$_u" ] || return 1
++    mkdir -p "$UPG/strings/0x409" "$UPG/configs/c.1/strings/0x409" "$UPG/functions/ffs.u2acprobe" "$UPF" \
++        || return 1
++    # the MTP stage of aa-proxy-rs v1.3.0 (usb_functionfs.rs): 18d1:4ee1, bcdDevice 0x3008, class at the
++    # interface, "aa-proxy" / "aa-proxy (<DT model>)" / serial 0123456 (no DT serial-number), config "config"
++    echo 0x18d1 > "$UPG/idVendor"; echo 0x4ee1 > "$UPG/idProduct"
++    echo 0x3008 > "$UPG/bcdDevice"; echo 0x0200 > "$UPG/bcdUSB"
++    for _a in bDeviceClass bDeviceSubClass bDeviceProtocol; do echo 0x00 > "$UPG/$_a"; done
++    echo aa-proxy > "$UPG/strings/0x409/manufacturer"
++    echo "aa-proxy ($(tr -d '\0' < /sys/firmware/devicetree/base/model 2> /dev/null))" > "$UPG/strings/0x409/product"
++    echo 0123456 > "$UPG/strings/0x409/serialnumber"
++    echo config > "$UPG/configs/c.1/strings/0x409/configuration"
++    mount -t functionfs u2acprobe "$UPF" || return 1
++    : > "$UPO"
++    u2ac-usbprobe "$UPF" 10000 3000 > "$UPO" 2>> /run/log/u2ac-usbprobe.log &
++    echo $! > /run/u2ac-usbprobe.pid
++    _n=0; while [ ! -e "$UPF/ep1" ] && [ $_n -lt 30 ]; do sleep 0.1; _n=$((_n + 1)); done
++    [ -e "$UPF/ep1" ] || return 1
++    ln -s "$UPG/functions/ffs.u2acprobe" "$UPG/configs/c.1/" && echo "$_u" > "$UPG/UDC"
++}
++# usbprobe_down: the port empty again and the probe gadget gone (NCM's own gadget is "baseline")
++usbprobe_down() {
++    [ -s /run/u2ac-usbprobe.pid ] && kill "$(cat /run/u2ac-usbprobe.pid)" 2> /dev/null
++    [ -e "$UPG/UDC" ] && echo "" > "$UPG/UDC" 2> /dev/null
++    rm -f "$UPG/configs/c.1/ffs.u2acprobe" /run/u2ac-usbprobe.pid
++    umount "$UPF" 2> /dev/null
++    rmdir "$UPG/functions/ffs.u2acprobe" "$UPG/configs/c.1/strings/0x409" "$UPG/configs/c.1" \
++        "$UPG/strings/0x409" "$UPG" 2> /dev/null
++    return 0
++}
++# usbprobe_end: wait for the probe's verdict, free the port, record the verdict
++usbprobe_end() {
++    _p=$(cat /run/u2ac-usbprobe.pid 2> /dev/null)
++    [ -n "$_p" ] && while kill -0 "$_p" 2> /dev/null; do sleep 0.05; done
++    _v=$(tail -n 1 "$UPO" 2> /dev/null)
++    rm -f /run/u2ac-usbprobe.pid
++    usbprobe_down
++    case $_v in car | noaoa | none) ;; *) _v=failed ;; esac
++    echo "$_v" > /run/u2ac-usbprobe
++}
++board_usb_probe() {
++    rm -f /run/u2ac-usbprobe
++    if [ -e /run/persist/u2ac-dev ]; then echo dev > /run/u2ac-usbprobe; return 0; fi
++    command -v u2ac-usbprobe > /dev/null 2>&1 || return 0
++    if ! usbprobe_up; then
++        usbprobe_down; echo failed > /run/u2ac-usbprobe; return 0
++    fi
++    # a car answers at once, a computer configures within ~0.5 s and then stays silent for 3 s
++    _n=0
++    while :; do
++        _v=$(tail -n 1 "$UPO" 2> /dev/null)
++        case $_v in car | noaoa | none) break ;; esac
++        # a probe that never ends (it cannot, its windows are bounded): the port goes back to NCM after 15 s
++        [ $_n -ge 150 ] && { usbprobe_down; echo failed > /run/u2ac-usbprobe; return 0; }
++        if [ $_n -ge 40 ] && [ "$_v" != configured ]; then
++            # nobody yet (a car still booting): rcS goes on without NCM, the probe keeps the port
++            (
++                usbprobe_end
++                if [ "$(cat /run/u2ac-usbprobe)" = noaoa ]; then
++                    # a host came late and is not a car (so far): NCM after all, as rcS would have
++                    echo noaoa-late > /run/u2ac-usbprobe.how
++                    _i=$(net-up ncm 2>> /run/log/net-up.log) && ssh-up "$NCM_DEV_IP" 2>> /run/log/ssh-up.log \
++                        && echo "rcS: NCM $_i $NCM_DEV_IP (a host came late, no AOA)"
++                fi
++            ) &
++            return 1
++        fi
++        sleep 0.1; _n=$((_n + 1))
++    done
++    usbprobe_end
++    [ "$_v" = noaoa ]
 +}
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/etc/baseline/udhcpc.sh b/baseline/arm-imx6ul-u2ac/rootfs/etc/baseline/udhcpc.sh
 new file mode 100755
@@ -202537,10 +202629,10 @@ index 0000000..8114b82
 \ No newline at end of file
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
 new file mode 100755
-index 0000000..fe9dba4
+index 0000000..812bf4b
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
-@@ -0,0 +1,561 @@
+@@ -0,0 +1,585 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# u2ac-aa start|stop|status|persist|aa-now|dev on|off|aa|flightlog [last|SEQ]  (Carlinkit U2AC, milouk 2026-11-26)
@@ -202551,9 +202643,10 @@ index 0000000..fe9dba4
 +#    car's own Bluetooth (the stock firmware needed hfpd killed for the same reason).
 +#  - Persistent state (pairings, aa-proxy-rs config + known devices) lives in /run/persist (the customer MTD
 +#    archive, `persist save`), saved only when it changes.
-+#  - USB port: a COMPUTER on it (it activates the NCM link and answers at 192.168.50.100) keeps this boot
-+#    in maintenance mode (NCM, ssh root@192.168.50.2, aa-proxy-rs not started); a CAR never speaks NCM,
-+#    so in the car aa-proxy-rs takes the UDC for Android Auto. `u2ac-aa dev on|off` forces it (persisted).
++#  - USB port: at boot it first shows an Android phone (u2ac-usbprobe, board-rcS.sh): a CAR asks it AOA at once
++#    and never sees NCM. A COMPUTER (silent there, then it activates the NCM link and answers at
++#    192.168.50.100) keeps this boot in maintenance mode (NCM, ssh root@192.168.50.2, aa-proxy-rs not
++#    started); in the car aa-proxy-rs takes the UDC for Android Auto. `u2ac-aa dev on|off` forces it (persisted).
 +#    The AP + ssh on 10.0.0.1 stay up in every mode.
 +# bluetoothd lives in /usr/libexec/bluetooth (BlueZ layout), which busybox init's default PATH lacks
 +export PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/libexec/bluetooth
@@ -202787,9 +202880,20 @@ index 0000000..fe9dba4
 +    pgrep -x bluetoothd > /dev/null
 +}
 +
++# The boot's USB probe ran first (board-rcS.sh board_usb_probe, u2ac-usbprobe): the port showed an Android
++# phone, and a car asks it AOA GET_PROTOCOL at once (car), or nobody configured it (none, after ~10 s): no
++# computer, and the car never saw NCM. Otherwise (noaoa: a host that stayed silent, dev, failed, no probe):
 +# a computer activates the NCM data interface (carrier) and answers ARP/ping at the host address it got
 +# by DHCP; a car head unit has no NCM driver, so carrier stays 0 there. Runs in parallel with the radios.
++# Its stdout is the verdict file: log with say ... > /dev/null.
 +computer_on_usb() {
++    t=$(cs)
++    if command -v u2ac-usbprobe > /dev/null 2>&1; then
++        until [ -s /run/u2ac-usbprobe ]; do [ $(($(cs) - t)) -ge 2000 ] && break; sleep 0.1; done
++    fi
++    _pv=$(cat /run/u2ac-usbprobe 2> /dev/null)
++    say "usb probe: ${_pv:-no verdict} ($(tr '\n' ' ' < /run/log/u2ac-usbprobe.log 2> /dev/null))" > /dev/null
++    case $_pv in car | none) return 1 ;; esac
 +    # wait for rcS's NCM bring-up (usb0 with its address, max 10 s)
 +    t=$(cs)
 +    until ip -4 addr show usb0 2>/dev/null | grep -q 192.168.50.2; do
@@ -202867,7 +202971,8 @@ index 0000000..fe9dba4
 +# status light: the WS2812B on GPIO1_IO03 (module u2ac-ws2812, /sys/class/leds/rgb:status) in the stock
 +# firmware's colours (2024.10.31 /etc/rgbLight.conf): StartUp 7e172b, BtConnecting 005f7f 500/100,
 +# BtConnected 00007f 300/100 (here: the phone is in, the car has not switched to Android Auto yet),
-+# HULinkSuccess 003b00 1000/1000, Fault 69480f 1000/500; maintenance (not a stock state) dim white.
++# HULinkSuccess 003b00 (stock blinks it 1000/1000; steady here since 2026-11-27: Android Auto is on the car's
++# screen, a blink read as "still connecting" in the car), Fault 69480f 1000/500; maintenance (not stock) dim white.
 +# led RRGGBB [ON_MS OFF_MS]: steady, or blinking by the kernel's timer trigger (no wakeups of ours).
 +# /run/persist/u2ac-led-off: dark (the LED draws ~5-20 mA lit).
 +LEDD=/sys/class/leds/rgb:status
@@ -202994,7 +203099,17 @@ index 0000000..fe9dba4
 +    mod_fast u2ac_ws2812 > /dev/null 2>&1 && led 7e172b
 +    # car or computer on USB: decided in parallel with the radios (its window no longer adds to the boot)
 +    rm -f /run/u2ac-usbhost
-+    ( if computer_on_usb; then echo computer; else echo car; fi > /run/u2ac-usbhost ) &
++    # A car with NCM on the port (the probe could not tell: no AOA within 3 s) gets the port emptied at once,
++    # not ~20 s later when aa-proxy-rs takes it (SYNC 3 shows "USB device not supported" while NCM is there).
++    # Dev mode keeps NCM.
++    ( if computer_on_usb; then echo computer
++      else
++          _g=/sys/kernel/config/usb_gadget/baseline/UDC
++          if [ ! -e "$P/u2ac-dev" ] && [ -n "$(cat "$_g" 2> /dev/null)" ]; then
++              echo "" > "$_g" 2> /dev/null && say "USB: NCM off the port (no computer on it)" > /dev/null
++          fi
++          echo car
++      fi > /run/u2ac-usbhost ) &
 +    cup=$!
 +    # page the 15 MB aa-proxy-rs into the cache while the radios load (xz squashfs: it would otherwise be
 +    # read and decompressed on the critical path when it starts); low priority, wasted only in dev mode
@@ -203039,7 +203154,7 @@ index 0000000..fe9dba4
 +            else st=idle$(ar); fi
 +            [ $st = live ] && fault=0
 +            if [ $st != $lit ]; then
-+                case $st in live) led 003b00 1000 1000 ;; phone) led 00007f 300 100 ;; fault) led 69480f 1000 500 ;;
++                case $st in live) led 003b00 ;; phone) led 00007f 300 100 ;; fault) led 69480f 1000 500 ;;
 +                    *) led_state ;; esac
 +                lit=$st
 +            fi
@@ -203091,6 +203206,7 @@ index 0000000..fe9dba4
 +        cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null | sed 's/^/cpu kHz /'
 +        if [ -e "$P/u2ac-dev" ]; then echo "mode: dev forced (NCM)"; elif [ -e "$P/u2ac-aa-force" ]; then echo "mode: android-auto forced"
 +        else echo "mode: auto ($(pgrep -x aa-proxy-rs > /dev/null && echo android-auto || echo maintenance))"; fi
++        echo "usb at boot: probe $(cat /run/u2ac-usbprobe 2> /dev/null || echo -), host $(cat /run/u2ac-usbhost 2> /dev/null || echo -)"
 +        ;;
 +    dev)
 +        case ${2:-} in
@@ -206533,8 +206649,152 @@ index 0000000..64484e5
 +
 +if __name__ == "__main__":
 +    sys.exit(main(sys.argv[1:]))
+diff --git a/baseline/arm-imx6ul-u2ac/tools/u2ac-usbprobe.c b/baseline/arm-imx6ul-u2ac/tools/u2ac-usbprobe.c
+new file mode 100644
+index 0000000..9675347
+--- /dev/null
++++ b/baseline/arm-imx6ul-u2ac/tools/u2ac-usbprobe.c
+@@ -0,0 +1,138 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++ * u2ac-usbprobe FFS_DIR [ENABLE_MS [AOA_MS]]: tell a car from a computer on the USB port before the
++ * dongle shows the port anything a car would refuse (Carlinkit U2AC, milouk 2026-11-27).
++ *
++ * Why: the boot gadget used to be NCM (maintenance from a computer). A head unit has no NCM driver,
++ * so Ford SYNC 3 said "USB device not supported" at every plug-in, for the ~28 s until aa-proxy-rs
++ * took the port (car test 2026-11-27). This program serves ep0 of a FunctionFS function that looks
++ * exactly like aa-proxy-rs's own MTP stage (the shell side sets 18d1:4ee1, bcdDevice 0x3008 and the
++ * same strings; here the interface: MTP class 06/01/01, bulk OUT, bulk IN, interrupt IN), i.e. an
++ * Android phone. A head unit that does Android Auto probes it at once with the AOA vendor request
++ * GET_PROTOCOL (51); SYNC 3 sent it 33 ms after SET_CONFIGURATION. No computer sends it.
++ *
++ * Output on stdout: "configured" (flushed) as soon as the host sets the configuration, then the verdict
++ * as the last line, exit 0:
++ *   car     GET_PROTOCOL seen (answered 2, like aa-proxy-rs; the caller unbinds the port right away)
++ *   noaoa   the host configured the device but sent no AOA request within AOA_MS (a computer, or a car
++ *           that waits for the driver first): the caller brings NCM up and tests for a computer there
++ *   none    nobody configured the device within ENABLE_MS (no host yet, or a charger)
++ * Exit 2 (nothing on stdout): FunctionFS failed; the caller falls back to NCM.
++ * Every other control request to the function is stalled (f_fs.c ep0: read for IN, write for OUT).
++ * The bulk endpoints are never opened: a host that talks MTP/PTP to them gets NAKs until the end. */
++#define _GNU_SOURCE
++#include <errno.h>
++#include <fcntl.h>
++#include <poll.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++#include <unistd.h>
++
++/* include/uapi/linux/usb/functionfs.h, spelled out (any libc's headers) */
++#define FFS_DESCRIPTORS_MAGIC_V2 3u
++#define FFS_STRINGS_MAGIC 2u
++#define FFS_HAS_FS_DESC 1u
++#define FFS_HAS_HS_DESC 2u
++#define FFS_ALL_CTRL_RECIP 64u /* class/vendor requests to the DEVICE reach us (AOA is device-recipient) */
++#define FFS_CONFIG0_SETUP 128u /* ... also before SET_CONFIGURATION (some head units probe that early) */
++enum { FFS_EV_BIND, FFS_EV_UNBIND, FFS_EV_ENABLE, FFS_EV_DISABLE, FFS_EV_SETUP, FFS_EV_SUSPEND, FFS_EV_RESUME };
++#define USB_DIR_IN 0x80
++#define USB_TYPE_MASK 0x60
++#define USB_TYPE_VENDOR 0x40
++#define AOA_GET_PROTOCOL 51
++
++#pragma pack(push, 1)
++struct if_desc { uint8_t bLength, bDescriptorType, bInterfaceNumber, bAlternateSetting, bNumEndpoints,
++                 bInterfaceClass, bInterfaceSubClass, bInterfaceProtocol, iInterface; };
++struct ep_desc { uint8_t bLength, bDescriptorType, bEndpointAddress, bmAttributes; uint16_t wMaxPacketSize;
++                 uint8_t bInterval; };
++struct speed { struct if_desc intf; struct ep_desc out, in, irq; };
++struct descs { uint32_t magic, length, flags, fs_count, hs_count; struct speed fs, hs; };
++struct strs { uint32_t magic, length, str_count, lang_count; uint16_t lang; char s[4]; };
++struct ctrlreq { uint8_t bRequestType, bRequest; uint16_t wValue, wIndex, wLength; };
++struct event { struct ctrlreq setup; uint8_t type, pad[3]; };
++#pragma pack(pop)
++
++static long ms_now(void) {
++    struct timespec t;
++    clock_gettime(CLOCK_MONOTONIC, &t);
++    return t.tv_sec * 1000L + t.tv_nsec / 1000000L;
++}
++
++static struct speed speed_descs(uint16_t mps, uint8_t irq_interval) {
++    struct speed s = {
++        { 9, 4, 0, 0, 3, 0x06, 0x01, 0x01, 1 },   /* "MTP", the MTP stage's class triple */
++        { 7, 5, 0x01, 2, mps, 0 },                /* bulk OUT */
++        { 7, 5, 0x82, 2, mps, 0 },                /* bulk IN */
++        { 7, 5, 0x83, 3, 28, irq_interval },      /* interrupt IN (MTP event endpoint) */
++    };
++    return s;
++}
++
++int main(int argc, char **argv) {
++    char path[512];
++    long enable_ms = argc > 2 ? atol(argv[2]) : 3000, aoa_ms = argc > 3 ? atol(argv[3]) : 3000;
++    if (argc < 2 || argv[1][0] == '-') { fprintf(stderr, "usage: u2ac-usbprobe FFS_DIR [ENABLE_MS [AOA_MS]]\n"); return 2; }
++    snprintf(path, sizeof path, "%s/ep0", argv[1]);
++    int ep0 = open(path, O_RDWR);
++    if (ep0 < 0) { fprintf(stderr, "u2ac-usbprobe: %s: %s\n", path, strerror(errno)); return 2; }
++
++    struct descs d = { FFS_DESCRIPTORS_MAGIC_V2, sizeof d,
++                       FFS_HAS_FS_DESC | FFS_HAS_HS_DESC | FFS_ALL_CTRL_RECIP | FFS_CONFIG0_SETUP, 4, 4,
++                       speed_descs(64, 6), speed_descs(512, 6) };
++    struct strs s = { FFS_STRINGS_MAGIC, sizeof s, 1, 1, 0x0409, "MTP" };
++    if (write(ep0, &d, sizeof d) != (ssize_t)sizeof d || write(ep0, &s, sizeof s) != (ssize_t)sizeof s) {
++        fprintf(stderr, "u2ac-usbprobe: writing descriptors: %s\n", strerror(errno));
++        return 2;
++    }
++    /* the caller binds the UDC once ep1 exists; ENABLE_MS counts from here */
++    long t0 = ms_now(), deadline = t0 + enable_ms;
++    int enabled = 0;
++    const char *verdict = "none";
++    for (;;) {
++        long left = deadline - ms_now();
++        if (left <= 0) break;
++        struct pollfd p = { ep0, POLLIN, 0 };
++        int r = poll(&p, 1, (int)left);
++        if (r < 0 && errno == EINTR) continue;
++        if (r <= 0) continue;   /* timeout: the loop head ends it */
++        struct event ev[4];
++        ssize_t n = read(ep0, ev, sizeof ev);
++        if (n < 0) { if (errno == EINTR || errno == EAGAIN) continue; fprintf(stderr, "u2ac-usbprobe: ep0: %s\n", strerror(errno)); return 2; }
++        for (int i = 0; i < (int)(n / (ssize_t)sizeof ev[0]); i++) {
++            const struct ctrlreq *q = &ev[i].setup;
++            switch (ev[i].type) {
++            case FFS_EV_ENABLE:
++                fprintf(stderr, "u2ac-usbprobe: configured after %ld ms\n", ms_now() - t0);
++                if (!enabled) {
++                    enabled = 1; verdict = "noaoa"; deadline = ms_now() + aoa_ms;
++                    puts("configured");   /* progress for the caller: a host is there, the AOA window runs */
++                    fflush(stdout);
++                }
++                break;
++            case FFS_EV_SETUP:
++                if ((q->bRequestType & USB_TYPE_MASK) == USB_TYPE_VENDOR && q->bRequest == AOA_GET_PROTOCOL
++                    && (q->bRequestType & USB_DIR_IN)) {
++                    uint8_t v[2] = { 2, 0 };
++                    (void)!write(ep0, v, q->wLength < 2 ? q->wLength : 2);
++                    fprintf(stderr, "u2ac-usbprobe: AOA GET_PROTOCOL after %ld ms: a car\n", ms_now() - t0);
++                    puts("car");
++                    return 0;
++                } else {
++                    uint8_t b = 0;
++                    fprintf(stderr, "u2ac-usbprobe: SETUP %02x %02x %04x %04x %u: stall\n", q->bRequestType,
++                            q->bRequest, q->wValue, q->wIndex, q->wLength);
++                    if (q->bRequestType & USB_DIR_IN) (void)!read(ep0, &b, 1);
++                    else (void)!write(ep0, &b, 1);
++                }
++                break;
++            default: break;   /* BIND, DISABLE (a host reset), SUSPEND...: the deadline stands */
++            }
++        }
++    }
++    fprintf(stderr, "u2ac-usbprobe: %s after %ld ms\n", verdict, ms_now() - t0);
++    puts(verdict);
++    return 0;
++}
 diff --git a/baseline/build.sh b/baseline/build.sh
-index 3f3ea52..d60f3fc 100755
+index 3f3ea52..bd6721c 100755
 --- a/baseline/build.sh
 +++ b/baseline/build.sh
 @@ -91,7 +91,7 @@ done
@@ -206637,7 +206897,18 @@ index 3f3ea52..d60f3fc 100755
      if [ "$DRY" = 1 ]; then
          for r in $RADIOS; do printf '+ cat zImage %s.dtb > %s\n' "$DTS_NAME-$r" "$OUTV/ccpa-baseline-$r.zimg"; done
          printf '+ check: size(zImage) + size(DTB) <= KERNEL_MAX %s B (0x302fd8) for each, else this variant fails\n' "$KERNEL_MAX"
-@@ -536,6 +559,10 @@ step_rootfs() {
+@@ -525,6 +548,10 @@ step_rootfs() {
+     # file against the musl sysroot of that tree) instead of a full userspace rebuild
+     [ "$DRY" = 1 ] || [ -x "$UOUT/usr/sbin/ocbm-accessory" ] || build_ocbm_accessory
+     x cp "$UOUT/usr/sbin/ocbm-accessory" "$W/usr/sbin/ocbm-accessory"
++    [ "$DRY" = 1 ] || build_board_tools
++    for _c in "$HERE/$BOARD"/tools/*.c; do
++        [ -f "$_c" ] && x cp "$UOUT/usr/sbin/$(basename "$_c" .c)" "$W/usr/sbin/"
++    done
+     if [ "$RADIO_TOOLS" = 1 ]; then
+         # revision 8: hostapd joins the radio tools; an older userspace tree gets it built here
+         [ "$DRY" = 1 ] || [ -x "$UOUT/usr/sbin/hostapd" ] || build_hostapd
+@@ -536,6 +563,10 @@ step_rootfs() {
      note "overlays: common/rootfs, $BOARD/rootfs, shared scripts, /etc/baseline (no .DS_Store / ._*)"
      x cp -R "$HERE/common/rootfs/." "$W/"
      [ -d "$HERE/$BOARD/rootfs" ] && x cp -R "$HERE/$BOARD/rootfs/." "$W/"
@@ -206648,7 +206919,7 @@ index 3f3ea52..d60f3fc 100755
      if [ "$RADIO_TOOLS" != 1 ]; then
          # the helpers would only say that their tools are missing
          x rm -f "$W/usr/sbin/wifi-connect" "$W/usr/sbin/wifi-scan" "$W/usr/sbin/bt-scan" "$W/etc/baseline/udhcpc.sh"
-@@ -567,6 +594,8 @@ step_rootfs() {
+@@ -567,6 +598,8 @@ step_rootfs() {
      # -type f: the busybox applet links need nothing, and the OCBM overlay links dangle in the image
      xsh "chmod 0755 '$W/init' '$W/etc/init.d/rcS' && find '$W/usr/sbin' -type f -exec chmod 0755 {} +"
      [ "$RADIO_TOOLS" = 1 ] && x chmod 0755 "$W/etc/baseline/udhcpc.sh"
@@ -206657,7 +206928,7 @@ index 3f3ea52..d60f3fc 100755
      note "kernel modules of variant $V (radio + storage; nothing loads them at boot)"
      xsh "cp -R '$OUTV/modules/lib/modules/.' '$W/lib/modules/' && rm -f '$W'/lib/modules/*/build '$W'/lib/modules/*/source"
      if [ "$RADIO_MODULES" = 1 ] && [ "$RADIO_FW" = 1 ]; then
-@@ -586,7 +615,7 @@ step_rootfs() {
+@@ -586,7 +619,7 @@ step_rootfs() {
               head -c 2 \"\$s\" | grep -q '#!' && { sh -n \"\$s\" || exit 1; }; done; true" || die "a rootfs script does not parse"
      note "mksquashfs (xz, all-root, no xattrs; LIVI's flags)"
      x rm -f "$IMGR"
@@ -206699,10 +206970,32 @@ index 20d2e73..5e98134 100644
 +CONFIG_DEBUG_FILE=y
  CONFIG_NO_RANDOM_POOL=y
 diff --git a/baseline/common/recipes/userspace.sh b/baseline/common/recipes/userspace.sh
-index e370c96..a4471d9 100644
+index e370c96..0a2f135 100644
 --- a/baseline/common/recipes/userspace.sh
 +++ b/baseline/common/recipes/userspace.sh
-@@ -255,10 +255,13 @@ build_hostapd() {
+@@ -193,6 +193,21 @@ build_ocbm_accessory() {
+     assert_static "$UOUT/usr/sbin/ocbm-accessory"
+ }
+ 
++# U2AC: a board's own C tools ($BOARD/tools/*.c, e.g. u2ac-usbprobe), static, rebuilt on every rootfs step
++# (one file each, seconds) so an image never carries a stale one
++build_board_tools() {
++    : "${TARGET_CC:=$UBUILD/musl-sysroot/bin/musl-gcc}"
++    for _c in "$HERE/$BOARD"/tools/*.c; do
++        [ -f "$_c" ] || continue
++        _b=$(basename "$_c" .c)
++        note "$_b ($BOARD/tools/$_b.c), static"
++        x mkdir -p "$UBUILD/board-tools" "$UOUT/usr/sbin"
++        x "$TARGET_CC" -static -Os -Wall -Wextra -Werror -o "$UBUILD/board-tools/$_b" "$_c"
++        x "${CROSS_COMPILE}strip" -o "$UOUT/usr/sbin/$_b" "$UBUILD/board-tools/$_b"
++        assert_static "$UOUT/usr/sbin/$_b"
++    done
++}
++
+ # ----------------------------------------------------------------- radio tools (RADIO_TOOLS=1)
+ # Libraries only these tools use go to their own prefix, never into the musl sysroot.
+ RADIO_SYSROOT=${UBUILD:-}/radio-sysroot
+@@ -255,10 +270,13 @@ build_hostapd() {
      x cp "$HERE/common/hostapd/hostapd.config" "$_s/hostapd/.config"
      xsh "printf '%s\\n' 'LIBS += -L$RADIO_SYSROOT/lib' >> '$_s/hostapd/.config'"
      xsh "cd '$_s/hostapd' && CFLAGS='-MMD -Os -Wall' LDFLAGS=-static EXTRALIBS='-lnl-3' \
@@ -206718,7 +207011,7 @@ index e370c96..a4471d9 100644
          || die "hostapd was not built as configured (nl80211 on, D-Bus off): $UBUILD/hostapd.log"
  }
 diff --git a/baseline/common/rootfs/etc/init.d/rcS b/baseline/common/rootfs/etc/init.d/rcS
-index 139c96e..9b378eb 100755
+index 139c96e..402b021 100755
 --- a/baseline/common/rootfs/etc/init.d/rcS
 +++ b/baseline/common/rootfs/etc/init.d/rcS
 @@ -36,6 +36,7 @@ fi
@@ -206729,7 +207022,21 @@ index 139c96e..9b378eb 100755
      ok=
      why=
      # Revision 8: OCBM is the boot default when a valid OCBM overlay is in flash and `usb-mode default`
-@@ -64,14 +65,15 @@ fi
+@@ -51,7 +52,12 @@ fi
+     else
+         msg=$(cat /run/baseline/usb-mode.msg 2> /dev/null)
+         [ -n "$msg" ] && con "$msg"
+-        if IF=$(net-up ncm 2> /run/log/net-up.log); then
++        # U2AC: a board hook may keep NCM off the port (board_usb_probe returns 1: a car on it, or no host
++        # yet); the way in is then the board's own (U2AC: its Wi-Fi AP + ssh), and a computer still gets NCM
++        if command -v board_usb_probe > /dev/null 2>&1 && ! board_usb_probe; then
++            ok=1
++            con "USB: no NCM for now ($(cat /run/u2ac-usbprobe 2> /dev/null || echo 'no host yet, the probe keeps listening'))"
++        elif IF=$(net-up ncm 2> /run/log/net-up.log); then
+             if ssh-up "$NCM_DEV_IP" 2> /run/log/ssh-up.log; then
+                 ok=1
+                 con "NCM $IF $NCM_DEV_IP, ssh/scp/sftp root@$NCM_DEV_IP (key or password), host gets $NCM_HOST_IP"
+@@ -64,14 +70,15 @@ fi
      fi
      N=$(mtd_num bootstate)
      if [ -n "$ok" ] && [ -n "$N" ]; then

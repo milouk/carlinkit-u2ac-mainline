@@ -1,6 +1,6 @@
 #!/bin/sh
 # dry run of the image's u2ac-aa start: real script, stubbed hardware (insmod, iw, btmgmt, hostapd, ...),
-# fake /sys on tmpfs. Needs a --privileged armv7 container of the rootfs. SCEN=car|computer|dev
+# fake /sys on tmpfs. Needs a --privileged armv7 container of the rootfs. SCEN=car|carncm|computer|dev
 set -u
 SCEN=${SCEN:-car}
 # tests the u2ac-aa / radio-lib.sh baked into the image (no copies from the repo)
@@ -17,6 +17,14 @@ mkdir -p /sys/devices/system/cpu/cpu0/cpufreq /sys/devices/system/cpu/cpufreq/on
 echo performance > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor; echo 0 > /sys/devices/system/cpu/cpufreq/ondemand/up_threshold
 mkdir -p /sys/devices/system/cpu/cpu0/cpuidle/state2; echo 1 > /sys/devices/system/cpu/cpu0/cpuidle/state2/disable
 echo 0 > /sys/class/net/usb0/carrier; [ "$SCEN" = computer ] && echo 1 > /sys/class/net/usb0/carrier
+# the boot's USB probe verdict (rcS board_usb_probe, tested by probe.sh): car = AOA seen, NCM never up;
+# carncm = no AOA within the window (a car waiting for the driver) so NCM came up: u2ac-aa must take it off
+case $SCEN in car) v=car ;; computer | carncm) v=noaoa ;; dev) v=dev ;; esac
+echo "$v" > /run/u2ac-usbprobe
+echo "u2ac-usbprobe: test verdict $v" > /run/log/u2ac-usbprobe.log
+if [ "$v" != car ]; then
+    mkdir -p /sys/kernel/config/usb_gadget/baseline; echo ci_hdrc.0 > /sys/kernel/config/usb_gadget/baseline/UDC
+fi
 : > /fake/modules
 export MODLOAD_PROC=/fake/modules MODLOAD_DIR=$(ls -d /lib/modules/*/ | head -n 1)
 log() { echo "$*" >> /run/stub.calls; }
@@ -82,7 +90,7 @@ sz=$(wc -c < /run/log/big.log); last=$(tail -n 1 /run/log/big.log)
 echo "--- state2=$(cat /sys/devices/system/cpu/cpu0/cpuidle/state2/disable)"
 echo "--- known_devices: $(tr '\n' ' ' < /run/aa-etc/known_devices 2> /dev/null)"
 # flight recorder (car mode: aa-proxy-rs is ours): the 90 s trigger = tick 18 = ~4 s here
-[ "$SCEN" = car ] && sleep 5
+case $SCEN in car | carncm) sleep 5 ;; esac
 echo "--- flightlog list: $(u2ac-aa flightlog 2>&1 | head -n 1)"
 echo "--- flightlog last: $(u2ac-aa flightlog last 2>&1 | grep -c '^=== ')"
 [ "$(head -c 11927552 $MTD_DEV/mtd3 | md5sum | cut -d' ' -f1)" = "$SQ0" ] && echo "--- squashfs region intact" \
@@ -91,5 +99,6 @@ echo "--- flightlog last: $(u2ac-aa flightlog last 2>&1 | grep -c '^=== ')"
 printf '\000\000\300\000' | dd of=$MTD_DEV/mtd3 bs=1 seek=40 conv=notrunc 2> /dev/null
 echo "--- flightlog guard: $(u2ac-aa flightlog 2>&1 | head -n 1)"
 L=/sys/class/leds/rgb:status; echo "--- led: color=$(cat $L/color 2>/dev/null) trigger=$(cat $L/trigger 2>/dev/null)"
+echo "--- ncm udc: [$(cat /sys/kernel/config/usb_gadget/baseline/UDC 2> /dev/null || echo none)] usbhost=$(cat /run/u2ac-usbhost)"
 echo "--- status:"; u2ac-aa status
 echo "--- persisted:"; ls -la /run/persist

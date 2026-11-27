@@ -20,10 +20,11 @@ dongle into a **wireless Android Auto adapter**: your phone connects to the dong
 and the dongle presents itself to the car as a wired Android Auto phone. The dongle's HAB-signed U-Boot is never
 modified. The new kernel goes in through the vendor's own kernel-staging path.
 
-> **Status: working on the bench, car validation in progress.** On real hardware: boot, Wi-Fi AP, Bluetooth,
-> auto-reconnect to a paired Pixel, the phone's Android Auto connection, the USB accessory handshake with a
-> simulated head unit, the status light, persistence and recovery. The first real car (Ford SYNC 3) exposed a
-> timing bug that is fixed and verified in simulation. A repeat car test is pending.
+> **Status: Android Auto runs in a real car (Ford SYNC 3), validation in progress.** On real hardware: boot,
+> Wi-Fi AP, Bluetooth, auto-reconnect to a paired Pixel, Android Auto on the car's screen, the status light,
+> persistence and recovery. Open: during one call the other side could not hear the driver (call audio does not
+> pass through the dongle, so the cause is being narrowed down). The car's "USB device not supported" message at
+> plug-in is fixed in the current source (USB probe below) and waits for the next car test.
 
 ## Features
 
@@ -36,7 +37,8 @@ modified. The new kernel goes in through the vendor's own kernel-staging path.
 - **Reconnects by itself**: every paired phone is dialled at boot. Pairings survive power cuts and are written to
   flash only when they change.
 - **Car or computer, decided at boot**: in a car it starts Android Auto, and on a computer's USB port it stays in
-  maintenance mode with USB networking (`ssh root@192.168.50.2`).
+  maintenance mode with USB networking (`ssh root@192.168.50.2`). The car never sees the USB network device, so
+  it shows no "USB device not supported" message.
 - **Web UI** on the hotspot (`http://10.0.0.1`) and over USB: status, logs, Wi-Fi name and password, paired
   phones, mode.
 - **Status light**: the stock WS2812B RGB LED driven by a small kernel module, in the vendor's colours.
@@ -56,8 +58,9 @@ modified. The new kernel goes in through the vendor's own kernel-staging path.
             5 GHz Wi-Fi: Android Auto (TCP 5288)
 ```
 
-1. At boot the dongle brings up its radios, a 5 GHz access point and BlueZ, then checks the USB port: a computer
-   that answers on USB networking means maintenance mode, anything else means Android Auto.
+1. At boot the dongle first shows the USB port an Android phone. A car asks it the Android Open Accessory
+   question at once and gets Android Auto. A host that stays silent gets USB networking, and a computer that
+   answers there means maintenance mode. Meanwhile the radios, a 5 GHz access point and BlueZ come up.
 2. aa-proxy-rs dials the paired phone over Bluetooth and sends it the access point's name, password and address.
    The phone joins the access point and opens its Android Auto connection on TCP port 5288.
 3. The dongle then shows the car a phone-like USB device. The car runs the Android Open Accessory handshake, the

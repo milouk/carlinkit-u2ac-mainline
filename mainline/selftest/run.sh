@@ -4,7 +4,9 @@
 #  1 every ELF in the image loads (no missing shared library)
 #  2 boot slots (common/shared/mtd.sh + the init's parse) under the RECOVERY busybox applets only, on a loop dev
 #  3 web UI: busybox httpd + CGI, every endpoint, token auth, input validation, injection attempts
-#  4 u2ac-aa start dry run (stubbed hardware) in the car / computer-on-USB / dev-forced cases
+#  4 u2ac-aa start dry run (stubbed hardware) in the car / car-after-NCM / computer-on-USB / dev-forced cases
+#  5 the boot's USB probe hook (rcS board_usb_probe) with a stand-in probe: car, computer, no host, late host,
+#    probe failure, dev mode (the real u2ac-usbprobe needs FunctionFS: tested on the dongle in RAM)
 set -u
 IMG=${1:?usage: run.sh rootfs.img [init]}
 D=$(cd "$(dirname "$0")" && pwd)
@@ -79,14 +81,21 @@ docker exec u2ac-selftest-web sh -c '[ ! -e /tmp/pwn ] && grep -q "^SSID=x;\$(to
 docker rm -f u2ac-selftest-web > /dev/null 2>&1
 
 # 4
-for sc in car computer dev; do
+for sc in car carncm computer dev; do
   out=$(run_arm --privileged -v "$W:/o:ro" -e SCEN=$sc "$TAG" /bin/sh /o/dry.sh 2>&1)
-  case $sc in car) want='aa-proxy-rs started (USB';; computer) want='a computer is on the USB port';; dev) want='dev mode (forced)';; esac
-  aap=-; [ $sc = car ] && aap=running
-  led='led: color=404040 trigger=none'; [ $sc = car ] && led='led: color=005f7f trigger=timer'
+  # car: the probe saw AOA (NCM never up); carncm: no AOA in time, NCM came up, u2ac-aa empties the port
+  case $sc in car | carncm) want='aa-proxy-rs started (USB';; computer) want='a computer is on the USB port';; dev) want='dev mode (forced)';; esac
+  case $sc in car) usb='ncm udc: \[none\] usbhost=car' pv=car;; carncm) usb='ncm udc: \[\] usbhost=car' pv=noaoa;;
+    computer) usb='ncm udc: \[ci_hdrc.0\] usbhost=computer' pv=noaoa;; dev) usb='ncm udc: \[ci_hdrc.0\]' pv=dev;; esac
+  carish=0; case $sc in car | carncm) carish=1;; esac
+  aap=-; [ $carish = 1 ] && aap=running
+  led='led: color=404040 trigger=none'; [ $carish = 1 ] && led='led: color=005f7f trigger=timer'
   # flight recorder: one slot written in car mode, none in the others; squashfs bytes untouched; guard refuses
-  fl='flightlog list: $'; [ $sc = car ] && fl='flightlog list: U2AC-FLIGHTLOG 1 seq=1 up=[0-9]* why=start+90s bytes=[0-9]'
-  flc='flightlog last: 0'; [ $sc = car ] && flc='flightlog last: [1-9][0-9]*$'
+  fl='flightlog list: $'; [ $carish = 1 ] && fl='flightlog list: U2AC-FLIGHTLOG 1 seq=1 up=[0-9]* why=start+90s bytes=[0-9]'
+  flc='flightlog last: 0'; [ $carish = 1 ] && flc='flightlog last: [1-9][0-9]*$'
+  echo "$out" | grep -q -- "--- $usb" && echo "$out" | grep -q "usb probe: $pv (u2ac-usbprobe: test verdict $pv" \
+    && { [ $sc != carncm ] || echo "$out" | grep -q 'USB: NCM off the port'; } \
+    && ok "usb at boot: $sc (probe $pv)" || { bad "usb at boot: $sc"; echo "$out" | grep -- '--- ncm udc\|usb probe\|NCM off'; }
   # every module after its dependencies (busybox modprobe got this wrong on the unit), the BD address set
   # (btmgmt answered), the status light in this mode's colour
   if echo "$out" | awk '/^insmod .*\/bluetooth\.ko/ { b = NR } /^insmod .*\/hci_uart\.ko bcm_force_early_baud=1/ { h = NR }
@@ -104,6 +113,22 @@ for sc in car computer dev; do
      && echo "$out" | grep -q -- '--- known_devices: 11:22:33:44:55:66 ' \
      && echo "$out" | grep -q -- '--- flightlog guard: flight log: no area'; then ok "start dry run: $sc"
   else bad "start dry run: $sc"; echo "$out" | sed -n '/--- u2ac-aa.log/,/--- stub/p'; echo "$out" | grep -- '^--- \(flightlog\|squashfs\|led\|known\)'; fi
+done
+
+# 5 the boot's USB probe hook (board_usb_probe) with a stand-in probe: return code (1 = no NCM from rcS), the
+# verdict, how long rcS waits, the late-host path, the probe's MTP-stage identity
+for ps in car computer nohost late fail dev; do
+  out=$(run_arm --privileged -v "$W:/o:ro" -e PSCEN=$ps "$TAG" /bin/sh /o/probe.sh 2>&1 | grep '^result')
+  id='ids=0x18d1:0x4ee1: product=\[aa-proxy (Carlinkit U2AC AutoKit mainline (i.MX6ULL))\]'
+  case $ps in
+    car) re="rc=1 ret=[01]\.[0-9] at_return=car final=car how=- udc=\[\] netup=0 sshup=0 probe=1 $id" ;;
+    computer) re="rc=0 ret=[345]\.[0-9] at_return=noaoa final=noaoa how=- udc=\[\] netup=0 sshup=0 probe=1 $id" ;;
+    nohost) re="rc=1 ret=[45]\.[0-9] at_return=- final=none how=- udc=\[\] netup=0 sshup=0 probe=1 $id" ;;
+    late) re="rc=1 ret=[45]\.[0-9] at_return=- final=noaoa how=noaoa-late udc=\[\] netup=1 sshup=1 probe=1 $id" ;;
+    fail) re="rc=0 ret=[234]\.[0-9] at_return=failed final=failed how=- udc=\[gone\] netup=0 sshup=0 probe=1 " ;;
+    dev) re="rc=0 ret=0\.[0-9] at_return=dev final=dev how=- udc=\[gone\] netup=0 sshup=0 probe=0 ids= " ;;
+  esac
+  echo "$out" | grep -q "$re" && ok "usb probe hook: $ps" || bad "usb probe hook: $ps: $out"
 done
 rm -rf "$W"
 echo "selftest: $FAIL failure(s)"
