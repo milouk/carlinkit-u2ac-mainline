@@ -2,7 +2,8 @@
 # Emulated self-test of a built U2AC rootfs (no dongle): mainline/selftest/run.sh <rootfs.img> [initramfs-init]
 # Docker Desktop runs the armv7 image under qemu-user. Checks:
 #  1 every ELF in the image loads (no missing shared library)
-#  2 boot slots (common/shared/mtd.sh + the init's parse) under the RECOVERY busybox applets only, on a loop dev
+#  2 boot slots (common/shared/mtd.sh + the init's parse) under the RECOVERY busybox applets only, on a loop dev;
+#    persist load all or nothing (a save cut short by a power loss restores nothing), same applets
 #  3 web UI: busybox httpd + CGI, every endpoint, token auth, input validation, injection attempts
 #  4 u2ac-aa start dry run (stubbed hardware) in the car / car-after-NCM / computer-on-USB / dev-forced cases
 #  5 the boot's USB probe hook (rcS board_usb_probe) with a stand-in probe: car, computer, no host, late host,
@@ -53,6 +54,14 @@ out=$(run_arm -v "$W:/w" "$TAG" /bin/sh -c 'mkdir -p /rb; cp /w/rbusybox /rb/bus
 dt=$(echo "$out" | awk '{ printf "%.2f", $2 - $1 }')
 case $dt in 0.1*|0.2*|0.3*|0.4*) ok "recovery read -t 0.2 waits ${dt} s" ;; *) bad "recovery read -t 0.2: '$out' (${dt} s)" ;; esac
 
+# 2c persist load is all or nothing, under the recovery busybox (recovery loads the archive too, it has no cp)
+out=$(run_arm -v "$W:/w" "$TAG" /bin/sh -c 'mkdir -p /rb; cp /w/rbusybox /rb/busybox
+  for a in $(sed "s#.*/##" /w/rbusybox.links); do ln -sf busybox /rb/$a; done; /bin/sh /w/persisttest.sh' 2>&1 | grep '^result')
+case $out in
+  *"whole_rc=0 whole_same=1 cut_rc=1 cut_files=[] "*) ok "persist: whole archive loads, one cut short loads nothing (recovery busybox)" ;;
+  *) bad "persist load: $out" ;;
+esac
+
 # 3
 docker rm -f u2ac-selftest-web > /dev/null 2>&1
 docker run -d --name u2ac-selftest-web --platform linux/arm/v7 -p 127.0.0.1:18081:80 -v "$W:/o:ro" "$TAG" /bin/sh /o/web-setup.sh > /dev/null
@@ -61,7 +70,7 @@ U=http://127.0.0.1:18081
 chk() { r=$(curl -s -m 30 "$@" 2>&1); case $r in *"$EXP"*) ok "web $L";; *) bad "web $L: $r";; esac; }
 L="/ index"; EXP='<title>AutoKit dongle</title>'; chk "$U/"
 for e in status about settings "logs?n=5&src=svc"; do L="/$e"; EXP='"ok":true'; chk "$U/cgi-bin/$e"; done
-L="token first"; EXP='"why":"first"'; chk "$U/cgi-bin/token"
+L="token made, not shown off USB on the default hotspot password"; EXP='"token":null,"why":"none"'; chk "$U/cgi-bin/token"
 L="token not again"; EXP='"token":null'; chk "$U/cgi-bin/token"
 T=$(docker exec u2ac-selftest-web cat /run/persist/u2ac-webtoken)
 A=$U/cgi-bin/action
@@ -78,6 +87,11 @@ L="forget path traversal refused"; EXP='not a Bluetooth address'; chk -X POST --
 L="mode"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&action=mode&to=maintenance" "$A"
 docker exec u2ac-selftest-web sh -c '[ ! -e /tmp/pwn ] && grep -q "^SSID=x;\$(touch /tmp/pwn)$" /run/persist/u2ac-wifi.conf' \
   && ok "web: injected text stored literally, never run" || bad "web: injection check"
+# with the hotspot password changed (the wifi test above), a new code goes to its first visitor again
+docker exec u2ac-selftest-web sh -c "rm -f /run/persist/u2ac-webtoken; : > /run/stub.calls"
+L="token first after the hotspot password change"; EXP='"why":"first"'; chk "$U/cgi-bin/token"
+sleep 1; docker exec u2ac-selftest-web sh -c 'grep -q "u2ac-aa persist" /run/stub.calls' \
+  && ok "web: a new access code is saved to flash at once" || bad "web: access code not persisted"
 docker rm -f u2ac-selftest-web > /dev/null 2>&1
 
 # 4
@@ -115,6 +129,7 @@ for sc in car carncm computer dev; do
      && echo "$out" | grep -q 'state2=0' && echo "$out" | grep -q 'cpu: normal (ondemand)' \
      && echo "$out" | grep -q -- "--- $fl" && echo "$out" | grep -q -- "--- $flc" \
      && echo "$out" | grep -q -- '--- squashfs region intact' \
+     && echo "$out" | grep -q -- '--- pre-restore save keeps pairings: yes' \
      && echo "$out" | grep -q -- '--- known_devices: 11:22:33:44:55:66 ' \
      && echo "$out" | grep -q -- '--- flightlog guard: flight log: no area'; then ok "start dry run: $sc"
   else bad "start dry run: $sc"; echo "$out" | sed -n '/--- u2ac-aa.log/,/--- stub/p'; echo "$out" | grep -- '^--- \(flightlog\|squashfs\|led\|known\)'; fi
@@ -128,8 +143,8 @@ for ps in car computer nohost late fail dev; do
   case $ps in
     car) re="rc=1 ret=[01]\.[0-9] at_return=car final=car how=- udc=\[\] netup=0 sshup=0 probe=1 $id" ;;
     computer) re="rc=0 ret=[345]\.[0-9] at_return=noaoa final=noaoa how=- udc=\[\] netup=0 sshup=0 probe=1 $id" ;;
-    nohost) re="rc=1 ret=[45]\.[0-9] at_return=- final=none how=- udc=\[\] netup=0 sshup=0 probe=1 $id" ;;
-    late) re="rc=1 ret=[45]\.[0-9] at_return=- final=noaoa how=noaoa-late udc=\[\] netup=1 sshup=1 probe=1 $id" ;;
+    nohost) re="rc=1 ret=[1234]\.[0-9] at_return=- final=none how=- udc=\[\] netup=0 sshup=0 probe=1 $id" ;;
+    late) re="rc=1 ret=[1234]\.[0-9] at_return=- final=noaoa how=noaoa-late udc=\[\] netup=1 sshup=1 probe=1 $id" ;;
     fail) re="rc=0 ret=[234]\.[0-9] at_return=failed final=failed how=- udc=\[gone\] netup=0 sshup=0 probe=1 " ;;
     dev) re="rc=0 ret=0\.[0-9] at_return=dev final=dev how=- udc=\[gone\] netup=0 sshup=0 probe=0 ids= " ;;
   esac

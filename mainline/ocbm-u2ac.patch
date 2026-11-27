@@ -1,9 +1,9 @@
 diff --git a/baseline/arm-imx6ul-u2ac/board.env b/baseline/arm-imx6ul-u2ac/board.env
 new file mode 100644
-index 0000000..0bb981f
+index 0000000..b0397be
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/board.env
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,80 @@
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# CPC200-CCPA (i.MX6ULL, 128 MiB, 16 MiB QSPI NOR, vendor HAB U-Boot kept). POSIX sh. Sourced by
 +# baseline/build.sh on the build host and installed as /etc/baseline/board.env in the recovery
@@ -69,11 +69,14 @@ index 0000000..0bb981f
 +# other radios' linux-firmware files (regulatory.db is still fetched with RADIO_FW=1). No OCBM overlay region:
 +# the whole rootfs MTD may hold the squashfs.
 +FW_IW416= FW_RTL8822CS_WIFI= FW_RTL8822CS_BT= FW_RTL8822CS_BTCFG= FW_RTL8822BS_WIFI=
-+OVERLAY_OFFSET=$ROOTFS_PART_SIZE
++OVERLAY_OFFSET=$ROOTFS_PART_SIZE OVERLAY_SIZE=0
++# U2AC flight recorder (u2ac-aa): the last 1 MiB of the rootfs MTD, 8 x 128 KiB slots; build.sh keeps the squashfs
++# out of it, u2ac-aa reads this value on the unit (/etc/baseline/board.env)
++FLIGHTLOG_SIZE=1048576
 +SQUASHFS_COMP=xz                 # U2AC: zstd did not fit (15.0 MB vs 12.4 MB partition); xz + ARM BCJ, 256K blocks
 +SQUASHFS_OPTS="-Xbcj arm -b 262144"
 +# U2AC kernel pin override (2026-11-26 trial): latest stable. sha256 from cdn.kernel.org sha256sums.asc over HTTPS.
-+KVER=${U2AC_KVER:-7.2.10}
++KVER=${U2AC_KVER:-7.2.15}
 +case $KVER in
 +    7.3.6) KERNEL_URL=https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.6.tar.xz
 +           KERNEL_SHA256=8183d475a76a0faffa92d6cd500af421f589dfd0300a0f1060bb875e11d45723 ;;
@@ -2047,10 +2050,10 @@ index 0000000..f1ec3a7
 \ No newline at end of file
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/etc/baseline/board-rcS.sh b/baseline/arm-imx6ul-u2ac/rootfs/etc/baseline/board-rcS.sh
 new file mode 100644
-index 0000000..3a4262d
+index 0000000..2282d11
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/etc/baseline/board-rcS.sh
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,126 @@
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# i.MX6ULL hooks for common/rootfs/etc/init.d/rcS. LEDs (gpio-leds, pins and polarity from LIVI's DTS;
 +# on hardware UNVERIFIED for the baseline), as `led` documents them:
@@ -2086,8 +2089,9 @@ index 0000000..3a4262d
 +# once, a computer never does. Verdict in /run/u2ac-usbprobe, read by u2ac-aa:
 +#   car    -> no NCM; the port stays empty until aa-proxy-rs presents Android Auto (phone in)
 +#   noaoa  -> NCM as before (a computer, or a car that waits for the driver: u2ac-aa's NCM test decides)
-+#   none   -> nobody configured the port within 4 s: no NCM now; the probe keeps the port until ~10 s for a
-+#             host that comes later (a car still booting: car; a computer: NCM is brought up then)
++#   none   -> nobody configured the port within 1.5 s: no NCM now; the probe keeps the port until ~10 s for a
++#             host that comes later (a car still booting: car; a computer: NCM is brought up then). rcS goes
++#             on (and marks the boot slot) after those 1.5 s, so a cranking car does not cut boots short
 +#   dev / missing -> NCM as before (dev mode, or the probe could not start: never worse than before)
 +# Returns 1 when rcS must not bring NCM up (car, or nobody yet), 0 for NCM.
 +UPG=/sys/kernel/config/usb_gadget/u2acprobe UPF=/run/u2ac-probe UPO=/run/u2ac-usbprobe.out
@@ -2121,7 +2125,11 @@ index 0000000..3a4262d
 +}
 +# usbprobe_down: the port empty again and the probe gadget gone (NCM's own gadget is "baseline")
 +usbprobe_down() {
-+    [ -s /run/u2ac-usbprobe.pid ] && kill "$(cat /run/u2ac-usbprobe.pid)" 2> /dev/null
++    # a probe still running holds ep0 (and so the functionfs mount): stop it and wait for it (max 1 s)
++    if [ -s /run/u2ac-usbprobe.pid ]; then
++        _p=$(cat /run/u2ac-usbprobe.pid); kill "$_p" 2> /dev/null
++        _w=0; while kill -0 "$_p" 2> /dev/null && [ $_w -lt 20 ]; do sleep 0.05; _w=$((_w + 1)); done
++    fi
 +    [ -e "$UPG/UDC" ] && echo "" > "$UPG/UDC" 2> /dev/null
 +    rm -f "$UPG/configs/c.1/ffs.u2acprobe" /run/u2ac-usbprobe.pid
 +    umount "$UPF" 2> /dev/null
@@ -2146,14 +2154,15 @@ index 0000000..3a4262d
 +    if ! usbprobe_up; then
 +        usbprobe_down; echo failed > /run/u2ac-usbprobe; return 0
 +    fi
-+    # a car answers at once, a computer configures within ~0.5 s and then stays silent for 3 s
++    # a car answers at once, a computer configures within ~0.5 s (Mac 0.2-0.45 s) and then stays silent for
++    # 3 s; a host that configures after 1.5 s is handled by the late path below like any other
 +    _n=0
 +    while :; do
 +        _v=$(tail -n 1 "$UPO" 2> /dev/null)
 +        case $_v in car | noaoa | none) break ;; esac
 +        # a probe that never ends (it cannot, its windows are bounded): the port goes back to NCM after 15 s
 +        [ $_n -ge 150 ] && { usbprobe_down; echo failed > /run/u2ac-usbprobe; return 0; }
-+        if [ $_n -ge 40 ] && [ "$_v" != configured ]; then
++        if [ $_n -ge 15 ] && [ "$_v" != configured ]; then
 +            # nobody yet (a car still booting): rcS goes on without NCM, the probe keeps the port
 +            (
 +                usbprobe_end
@@ -203043,10 +203052,10 @@ index 0000000..8114b82
 \ No newline at end of file
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
 new file mode 100755
-index 0000000..43d5aee
+index 0000000..d2d7a3d
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
-@@ -0,0 +1,593 @@
+@@ -0,0 +1,645 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# u2ac-aa start|stop|status|persist|aa-now|dev on|off|aa|flightlog [last|SEQ]  (Carlinkit U2AC, milouk 2026-11-26)
@@ -203097,17 +203106,22 @@ index 0000000..43d5aee
 +    [ -s "$P/machine-id" ] || { mkdir -p "$P"; cat /proc/sys/kernel/random/uuid | tr -d - > "$P/machine-id"; }
 +    cp "$P/machine-id" /run/varlib/dbus/machine-id
 +    chmod 700 /run/varlib/bluetooth
++    # from now on the live dirs hold the archive's state: state_save may mirror them back (not before)
++    : > /run/u2ac-restored
 +}
 +
-+# sig DIR: content signature (path list + file contents; NOT mtimes or modes, which change on every copy)
++# sig DIR: content signature (path list + file contents; NOT mtimes or modes, which change on every copy).
++# One md5sum for all files (-exec +), its lines sorted: same result whatever order find returns.
 +sig() {
 +    (cd "$1" 2>/dev/null || exit 0
 +     find . | sort
-+     find . -type f | sort | while read -r _f; do md5sum "$_f"; done) | md5sum | cut -d' ' -f1
++     find . -type f -exec md5sum {} + | sort) | md5sum | cut -d' ' -f1
 +}
 +
-+# sync_dir SRC NAME: make $P/NAME a copy of SRC, touching $P/NAME only when the content differs
++# sync_dir SRC NAME: make $P/NAME a copy of SRC, touching $P/NAME only when the content differs.
++# A missing SRC changes nothing (an empty copy would replace the archived pairings/config).
 +sync_dir() {
++    [ -d "$1" ] || return 0
 +    _sd=/run/persist.next/$2
 +    rm -rf "$_sd"; mkdir -p "$_sd"; cp -a "$1/." "$_sd/" 2>/dev/null
 +    case $2 in
@@ -203133,8 +203147,12 @@ index 0000000..43d5aee
 +        exec 8> /run/u2ac-state.lock
 +        flock 8
 +        mkdir -p "$P" /run/persist.next
-+        sync_dir /run/varlib/bluetooth bluetooth
-+        sync_dir /run/aa-etc aa-etc
++        # before state_restore ran (e.g. the radios failed at boot and start() returned) the live dirs are
++        # not the archive's: save $P as loaded (flags like u2ac-dev included), never empty copies over it
++        if [ -e /run/u2ac-restored ]; then
++            sync_dir /run/varlib/bluetooth bluetooth
++            sync_dir /run/aa-etc aa-etc
++        fi
 +        rm -rf /run/persist.next "$P/aa-data" "$P/aa-proxy-rs.config.toml"   # older layouts, never needed
 +        _s=$(sig "$P")
 +        [ "$_s" = "$(cat /run/persist.sig 2>/dev/null)" ] && exit 0
@@ -203248,8 +203266,7 @@ index 0000000..43d5aee
 +    udhcpd /usr/share/u2ac/udhcpd-wlan.conf
 +    # web UI (busybox httpd + CGI) on the AP, and on the USB link when a computer brought NCM up
 +    httpd -p 10.0.0.1:80 -h /usr/share/u2ac/www && echo "$(pgrep -n -x httpd)" > /run/httpd-wlan.pid
-+    ip -4 addr show usb0 2>/dev/null | grep -q 192.168.50.2 \
-+        && httpd -p 192.168.50.2:80 -h /usr/share/u2ac/www && echo "$(pgrep -n -x httpd)" > /run/httpd-usb.pid
++    usb_httpd
 +    # ssh over the AP too (same keys/host key as the NCM dropbear)
 +    # KEY-ONLY on the AP (-s: no password logins): the AP password is the well-known vendor default and the
 +    # root password the documented dev default, so a password login here would be root for anyone in range.
@@ -203334,6 +203351,15 @@ index 0000000..43d5aee
 +    return 1
 +}
 +
++# usb_httpd: the web UI on the USB link, once NCM has its address. Called from ap_up and again when a
++# computer was found (ap_up's moment can be too early: the USB probe delays NCM, a late host gets it after
++# the AP is up, and a failed hostapd returns before ap_up gets here). One instance.
++usb_httpd() {
++    [ -s /run/httpd-usb.pid ] && kill -0 "$(cat /run/httpd-usb.pid)" 2> /dev/null && return 0
++    ip -4 addr show usb0 2>/dev/null | grep -q 192.168.50.2 || return 1
++    httpd -p 192.168.50.2:80 -h /usr/share/u2ac/www && echo "$(pgrep -n -x httpd)" > /run/httpd-usb.pid
++}
++
 +# aa-proxy-rs supervised: restarted if it dies, protected from the OOM killer, slight CPU priority
 +aa_run() {
 +    (
@@ -203350,12 +203376,19 @@ index 0000000..43d5aee
 +        # `: > /run/persist/u2ac-hfp-guard-off; persist save`
 +        [ -e "$P/u2ac-hfp-guard-off" ] || export AA_HFP_GUARD=1
 +        cd /run/data
++        # restart at once after a crash in a long run (2 s), back off up to 30 s when it keeps dying young (a
++        # bad config would otherwise start the 15 MB binary every 2 s on the single core all drive)
++        _d=2
 +        while :; do
++            _t0=$(cs)
 +            # its info lines already go to /var/log/aa-proxy-rs.log (config logfile); the terminal logger
 +            # writes info to stdout and warn/error (+ panics) to stderr: keep only stderr here, not a 2nd copy
 +            aa-proxy-rs > /dev/null 2>> /run/log/aa-proxy-rs.console
-+            say "aa-proxy-rs exited ($?), restarting in 2 s"
-+            sleep 2
++            _rc=$?
++            [ $(($(cs) - _t0)) -ge 6000 ] && _d=2
++            say "aa-proxy-rs exited ($_rc), restarting in $_d s"
++            sleep $_d
++            _d=$((_d * 2)); [ $_d -gt 30 ] && _d=30
 +        done
 +    ) &
 +    echo $! > /run/aa-proxy-rs.pid
@@ -203427,7 +203460,9 @@ index 0000000..43d5aee
 +# boot. Read it from maintenance mode: `u2ac-aa flightlog` (list), `u2ac-aa flightlog last|SEQ` (print).
 +# /run/persist/u2ac-flightlog-off: never written. FL_ERASE (DEVICE OFFSET BLOCKS) replaces flash_erase in the
 +# emulated selftest (MTD_SYS/MTD_DEV point mtd.sh at plain files there).
-+FL_AREA=1048576 FL_SLOT=131072 FL_HDR=512
++# the area size is board.env's FLIGHTLOG_SIZE, which build.sh keeps the squashfs out of
++FL_AREA=$(sed -n 's/^FLIGHTLOG_SIZE=\([0-9][0-9]*\).*/\1/p' /etc/baseline/board.env 2> /dev/null)
++FL_AREA=${FL_AREA:-1048576} FL_SLOT=131072 FL_HDR=512
 +FL_ERASE=${FL_ERASE:-flash_erase -q}
 +fl_dev() {
 +    _n=$(mtd_num rootfs) || return 1
@@ -203485,10 +203520,29 @@ index 0000000..43d5aee
 +    # never outside [area, end of the MTD): the squashfs lies below FL_OFF (fl_dev checked its bytes_used)
 +    [ "$_off" -ge "$FL_OFF" ] && [ $((_off + FL_SLOT)) -le "$_psz" ] && [ $((_off % 65536)) = 0 ] \
 +        || { say "flight log: slot offset $_off outside the area, not written"; FL_N=99; rm -f /run/fl.slot; return 1; }
-+    if $FL_ERASE "$FL_D" "$_off" 2 && dd if=/run/fl.slot of="$FL_D" bs=512 seek=$((_off / 512)) conv=notrunc 2> /dev/null
++    # a slot fl_prep erased ahead of time (and still all 0xFF) is only programmed here: no erase stall now
++    if { fl_erased "$_off" || $FL_ERASE "$FL_D" "$_off" 2; } \
++        && dd if=/run/fl.slot of="$FL_D" bs=512 seek=$((_off / 512)) conv=notrunc 2> /dev/null
 +    then FL_N=$((${FL_N:-0} + 1)); say "flight log: seq $FL_SEQ ($1) recorded"
 +    else say "flight log: write of seq $FL_SEQ FAILED"; fi
 +    rm -f /run/fl.slot
++}
++# fl_erased OFF: the 128 KiB slot at OFF reads all 0xFF
++fl_erased() {
++    [ "$(dd if="$FL_D" bs=65536 skip=$(($1 / 65536)) count=2 2> /dev/null | tr -d '\377' | head -c 1 | wc -c)" = 0 ]
++}
++# fl_prep: erase the slot the next fl_write uses ahead of time, called only outside a session (every NOR erase
++# stalls all rootfs reads for 0.4-2 s), so the write 60 s into a live session only programs pages. Once per slot.
++fl_prep() {
++    [ -e "$P/u2ac-flightlog-off" ] && return 0
++    [ "${FL_N:-0}" -ge 40 ] && return 0
++    [ -n "${FL_OFF:-}" ] || fl_dev || return 1
++    [ -n "${FL_SEQ:-}" ] || FL_SEQ=$(fl_lastseq)
++    _no=$((FL_OFF + ((FL_SEQ + 1) % 8) * FL_SLOT))
++    [ "${FL_PREP:-}" = "$_no" ] && return 0
++    [ "$_no" -ge "$FL_OFF" ] && [ $((_no + FL_SLOT)) -le "$_psz" ] && [ $((_no % 65536)) = 0 ] || return 1
++    fl_erased "$_no" || $FL_ERASE "$FL_D" "$_no" 2 || return 1
++    FL_PREP=$_no
 +}
 +flightlog() { # [last|SEQ]
 +    fl_dev || { echo "flight log: no area (rootfs MTD / squashfs check failed)" >&2; return 1; }
@@ -203549,6 +203603,7 @@ index 0000000..43d5aee
 +        say "dev mode (forced): USB stays NCM (ssh root@192.168.50.2), aa-proxy-rs not started"
 +    elif [ ! -e "$P/u2ac-aa-force" ] && wait $cup && [ "$(cat /run/u2ac-usbhost 2> /dev/null)" = computer ]; then
 +        say "a computer is on the USB port: maintenance mode for this boot (NCM, ssh root@192.168.50.2); aa-proxy-rs not started"
++        usb_httpd || say "web UI on USB not started (no 192.168.50.2 on usb0)"
 +    else
 +        aa_run
 +        say "aa-proxy-rs started (USB = Android Auto toward the car; ssh root@10.0.0.1 over AutoKit)"
@@ -203593,6 +203648,8 @@ index 0000000..43d5aee
 +                if [ "$fl_at" = "$k" ]; then
 +                    fl_write "${fl_why:-start+90s}"; fl_sz=$(wc -c < /run/log/aa-proxy-rs.log 2> /dev/null)
 +                fi
++                # outside a session: the next slot erased already (no I/O once it is)
++                [ $m = session ] || fl_prep
 +            fi
 +        done
 +    ) &
@@ -203616,8 +203673,12 @@ index 0000000..43d5aee
 +    persist) state_save force || exit 1 ;;
 +    flightlog) flightlog "${2:-}" ;;
 +    aa-now)
-+        # start Android Auto now, from maintenance mode (the NCM link to the computer goes away)
-+        pgrep -x aa-proxy-rs > /dev/null && { echo "aa-proxy-rs already running"; exit 0; }
++        # start Android Auto now, from maintenance mode (the NCM link to the computer goes away). The supervisor
++        # counts, not only the process: between two of its restarts no aa-proxy-rs runs for a moment
++        if { [ -s /run/aa-proxy-rs.pid ] && kill -0 "$(cat /run/aa-proxy-rs.pid)" 2> /dev/null; } \
++            || pgrep -x aa-proxy-rs > /dev/null; then
++            echo "aa-proxy-rs already running"; exit 0
++        fi
 +        aa_run; say "aa-proxy-rs started by hand (aa-now)"; led_state ;;
 +    status)
 +        for d in hostapd udhcpd dbus-daemon bluetoothd aa-proxy-rs; do
@@ -205159,10 +205220,10 @@ index 0000000..b43d213
 +opt lease 86400
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md
 new file mode 100644
-index 0000000..0093926
+index 0000000..fd8a6bf
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,105 @@
 +# U2AC web UI
 +
 +A status and settings page for the dongle: one static `index.html` (inline CSS/JS, no external
@@ -205176,11 +205237,14 @@ index 0000000..0093926
 +httpd -p 192.168.50.2:80 -h /usr/share/u2ac/www    # on the USB (NCM) link, once usb0 has its address
 +```
 +
++`u2ac-aa` starts both: the AP instance in `ap_up`, the USB one there or, when NCM comes up later (the boot's
++USB probe delays it, a late computer gets it after the AP), as soon as a computer is found (`usb_httpd`).
++
 +- Run it as root: the CGIs write `/run/persist`, call `btmgmt`, `u2ac-aa`, `persist` and `reboot`.
 +- `httpd` can bind only to an address that already exists, so start each instance after its address is up.
-+- **Port clash:** the shipped `aa-proxy-rs.config.toml` has `webserver = "0.0.0.0:80"`. A wildcard
-+  bind on :80 makes `httpd -p 10.0.0.1:80` fail (or the other way round). Set it to
-+  `webserver = "0.0.0.0:8080"`: the About tab links to `http://<host>:8080/` as "Advanced (aa-proxy)".
++- aa-proxy-rs's own web server listens on `127.0.0.1:8080` only (shipped config.toml: no login, settings
++  that run shell commands), so it never clashes with this one on :80. Reach it over ssh:
++  `ssh -L 8080:127.0.0.1:8080 root@10.0.0.1`, then http://localhost:8080.
 +- Files: `cgi-bin/*` must be mode 0755, `cgi-bin/_lib.sh` mode 0644 (sourced, never run; `httpd` answers
 +  404 for it).
 +
@@ -205202,7 +205266,7 @@ index 0000000..0093926
 +
 +| action | Fields | Effect |
 +|---|---|---|
-+| `wifi` | `ssid`, `psk`, `alias` (each optional, empty keeps the current value) | Rewrites the first `  ssid = "…"`, `  wpa_passphrase = "…"` and `  btalias = "…"` lines of `/etc/aa-proxy-rs/config.toml`, writes `/run/persist/u2ac-wifi.conf`, then `u2ac-aa persist` (or `persist save` when only the override changed). Applies after a reboot. |
++| `wifi` | `ssid`, `psk`, `alias` (each optional, empty keeps the current value) | Rewrites the first `  ssid = "…"`, `  wpa_passphrase = "…"` and `  btalias = "…"` lines of `/etc/aa-proxy-rs/config.toml`, writes `/run/persist/u2ac-wifi.conf`, then `u2ac-aa persist`. Applies after a reboot. |
 +| `forget` | `dev=AA:BB:CC:DD:EE:FF` or `dev=all` | `btmgmt -i hci0 unpair`, removes the device directory (and its `cache/` entry), then `u2ac-aa persist`. |
 +| `mode` | `to=auto`, `maintenance` or `aa` | `u2ac-aa dev off`, `dev on` or `dev aa` (from the next boot). |
 +| `aa-now` | | `u2ac-aa aa-now`. |
@@ -205233,19 +205297,7 @@ index 0000000..0093926
 +- The same values are in config.toml, so aa-proxy-rs tells the phone the credentials the AP uses.
 +  If the AP ignores the override, the phone is sent a password the AP does not accept.
 +
-+Wiring this needs a change to `ap_up` in `/usr/sbin/u2ac-aa`, for example right after `HC` is chosen:
-+
-+```sh
-+W=$P/u2ac-wifi.conf
-+if [ -s "$W" ]; then
-+    S=$(sed -n 's/^SSID=//p' "$W" | head -n 1); K=$(sed -n 's/^PSK=//p' "$W" | head -n 1)
-+    if [ -n "$S" ] && [ ${#K} -ge 8 ]; then
-+        grep -v -e '^ssid=' -e '^wpa_passphrase=' "$HC" > /run/hostapd.conf
-+        printf 'ssid=%s\nwpa_passphrase=%s\n' "$S" "$K" >> /run/hostapd.conf
-+        HC=/run/hostapd.conf
-+    fi
-+fi
-+```
++`ap_up` in `/usr/sbin/u2ac-aa` reads it this way (length checks included) before it starts `hostapd`.
 +
 +## Security
 +
@@ -205253,10 +205305,11 @@ index 0000000..0093926
 +`cgi-bin/action` needs an access code:
 +
 +- 32 hex characters in `/run/persist/u2ac-webtoken` (0600), created by the first `GET cgi-bin/token`
-+  when the file does not exist (atomically, so only one visitor gets it). It is persisted with the
-+  next save of `/run/persist` (every change made here triggers one).
-+- `cgi-bin/token` returns the code only to the request that created it, to clients on the USB link
-+  (`REMOTE_ADDR` in 192.168.50.0/24), and once after `touch /run/u2ac-web/reveal-once` (over ssh).
++  when the file does not exist (atomically, so only one visitor gets it) and saved to flash at once
++  (`u2ac-aa persist`: a code lost at ignition-off would reopen the window below on the next boot).
++- `cgi-bin/token` returns the code to clients on the USB link (`REMOTE_ADDR` in 192.168.50.0/24), once
++  after `touch /run/u2ac-web/reveal-once` (over ssh), and to the request that created it, but on the
++  hotspot only once its password is no longer the vendor default (12345678: anyone in range can join).
 +  Everyone else gets `null` and types the code in; the page keeps it in `localStorage`.
 +- Mutations are POST only and also need `confirm=yes` (the page asks first). A cross-site form cannot
 +  know the code, so it cannot make changes.
@@ -205833,20 +205886,28 @@ index 0000000..a738dff
 +}'
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/token b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/token
 new file mode 100755
-index 0000000..dd8665b
+index 0000000..4d93e02
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/token
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,55 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# GET /cgi-bin/token -> {"ok","token":"<32 hex>"|null,"why":"first|usb|reveal|none","usb":bool}
 +# The access code for changes (POST /cgi-bin/action). It is handed out only:
-+#   first  - to the request that creates it (the file did not exist yet: first visit after a fresh persist)
++#   first  - to the request that creates it (the file did not exist yet: first visit after a fresh persist),
++#            if it comes over USB or the hotspot no longer has the vendor's default password
 +#   usb    - to any request from the USB link (192.168.50.0/24: a computer on the dongle's own cable)
 +#   reveal - once, after `touch /run/u2ac-web/reveal-once` (e.g. over ssh); the flag is then removed
 +# Anyone else gets null and has to type it in (it is in /run/persist/u2ac-webtoken).
 +_d=${0%/*}; [ "$_d" = "$0" ] && _d=.
 +. "$_d/_lib.sh"
++
++# default_psk: the hotspot still has the vendor's well-known password (no override, or the override is it)
++default_psk() {
++    _k=; [ -s "$WIFI_OVR" ] && _k=$(sed -n 's/^PSK=//p' "$WIFI_OVR" | head -n 1)
++    [ -n "$_k" ] || _k=$(sed -n 's/^wpa_passphrase=//p' "$R/usr/share/u2ac/hostapd.conf" 2> /dev/null | head -n 1)
++    [ "$_k" = 12345678 ]
++}
 +
 +WHY=none
 +token_read
@@ -205854,10 +205915,21 @@ index 0000000..dd8665b
 +    token_new && WHY=first
 +    token_read
 +    [ -n "$TOK" ] || fail "could not create the access code in /run/persist" persist
-+    [ "$WHY" = first ] && weblog "access code created and shown"
++    # to flash at once: the 30 s saver skips live sessions, and a code lost at ignition-off reopens the
++    # "first visitor gets it" window on the next boot
++    [ "$WHY" = first ] && { u2ac-aa persist > /dev/null 2>&1 & }
 +fi
 +USB=false
 +from_usb && USB=true
++# On the vendor's default hotspot password anyone in range can join the hotspot: then a new code is shown
++# only over the USB link (a computer on the dongle's cable), never to the first visitor on the hotspot
++if [ "$WHY" = first ]; then
++    if [ "$USB" = false ] && default_psk; then
++        WHY=none; weblog "access code created, not shown (hotspot on the vendor default password: USB only)"
++    else
++        weblog "access code created and shown"
++    fi
++fi
 +if [ "$WHY" != first ]; then
 +    if [ "$USB" = true ]; then
 +        WHY=usb
@@ -207073,10 +207145,10 @@ index 0000000..64484e5
 +    sys.exit(main(sys.argv[1:]))
 diff --git a/baseline/arm-imx6ul-u2ac/tools/u2ac-usbprobe.c b/baseline/arm-imx6ul-u2ac/tools/u2ac-usbprobe.c
 new file mode 100644
-index 0000000..9675347
+index 0000000..76de338
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/tools/u2ac-usbprobe.c
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,139 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later
 + * u2ac-usbprobe FFS_DIR [ENABLE_MS [AOA_MS]]: tell a car from a computer on the USB port before the
 + * dongle shows the port anything a car would refuse (Carlinkit U2AC, milouk 2026-11-27).
@@ -207176,7 +207248,8 @@ index 0000000..9675347
 +        struct pollfd p = { ep0, POLLIN, 0 };
 +        int r = poll(&p, 1, (int)left);
 +        if (r < 0 && errno == EINTR) continue;
-+        if (r <= 0) continue;   /* timeout: the loop head ends it */
++        if (r < 0) { fprintf(stderr, "u2ac-usbprobe: poll: %s\n", strerror(errno)); return 2; }  /* never spin */
++        if (r == 0) continue;   /* timeout: the loop head ends it */
 +        struct event ev[4];
 +        ssize_t n = read(ep0, ev, sizeof ev);
 +        if (n < 0) { if (errno == EINTR || errno == EAGAIN) continue; fprintf(stderr, "u2ac-usbprobe: ep0: %s\n", strerror(errno)); return 2; }
@@ -207216,7 +207289,7 @@ index 0000000..9675347
 +    return 0;
 +}
 diff --git a/baseline/build.sh b/baseline/build.sh
-index 3f3ea52..bd6721c 100755
+index 3f3ea52..1fe7334 100755
 --- a/baseline/build.sh
 +++ b/baseline/build.sh
 @@ -91,7 +91,7 @@ done
@@ -207359,6 +207432,17 @@ index 3f3ea52..bd6721c 100755
      if [ "$DRY" = 1 ]; then
          printf '+ check: size(rootfs.img) <= %s B (0xc60000), <= %s B (the OCBM overlay region, board.env) and a multiple of 4096\n' "$ROOTFS_PART_SIZE" "${OVERLAY_OFFSET:-$ROOTFS_PART_SIZE}"
          printf '+ write %s.sha256\n' "$IMGR"
+@@ -597,6 +630,10 @@ step_rootfs() {
+     # revision 8: the end of the partition is the OCBM overlay region; a squashfs reaching into it would
+     # overwrite the overlay at the next flash-rootfs (and ocbm-overlay refuses to write beside it)
+     [ "$size" -le "${OVERLAY_OFFSET:-$ROOTFS_PART_SIZE}" ] || die "rootfs is $size B, past the OCBM overlay region at $OVERLAY_OFFSET (board.env)"
++    # U2AC: a board flight recorder keeps the last FLIGHTLOG_SIZE bytes of the partition (u2ac-aa reads the same
++    # board.env value); a squashfs reaching into them would switch the recorder off on the unit, silently
++    [ "$size" -le $((ROOTFS_PART_SIZE - ${FLIGHTLOG_SIZE:-0})) ] \
++        || die "rootfs is $size B, into the flight-log area (the last ${FLIGHTLOG_SIZE:-0} B of the partition, board.env FLIGHTLOG_SIZE)"
+     [ $((size % 4096)) -eq 0 ] || die "rootfs is $size B, not a multiple of 4 KiB (flash-rootfs refuses that)"
+     sha256sum "$IMGR" | sed "s|  .*|  rootfs.img|" > "$IMGR.sha256"
+     log "rootfs $size B of $ROOTFS_PART_SIZE B ($((ROOTFS_PART_SIZE - size)) B free; $((${OVERLAY_OFFSET:-$ROOTFS_PART_SIZE} - size)) B below the OCBM overlay region), sha256 $(cut -d' ' -f1 "$IMGR.sha256")"
 diff --git a/baseline/common/busybox/recovery.applets b/baseline/common/busybox/recovery.applets
 index 3ff1508..5b2e4f8 100644
 --- a/baseline/common/busybox/recovery.applets
@@ -207582,10 +207666,49 @@ index 6b59c05..9291e1b 100644
 +    flash_eraseall -q "$MTD_DEV/mtd$1"
 +}
 diff --git a/baseline/common/shared/persist b/baseline/common/shared/persist
-index c666608..83c80ff 100755
+index c666608..ffb7e4d 100755
 --- a/baseline/common/shared/persist
 +++ b/baseline/common/shared/persist
-@@ -74,6 +74,10 @@ case ${1:-} in
+@@ -16,7 +16,8 @@
+ # when there is no archive or no MTD at all, so the password login always has a hash to check.
+ # The 'customer' partition is the one LIVI's livid keeps its settings in: a LIVI archive there does not
+ # parse as tar, `load` reports it, and the first rootfs `save` replaces it.
+-# A power loss during `save` loses the archive (the host key is regenerated, the fingerprint changes).
++# A power loss during `save` loses the archive (the host key is regenerated, the fingerprint changes):
++# `load` restores an archive completely or not at all, never the part written before the cut.
+ # PERSIST_DEV=<file> replaces the MTD (tests; recovery still refuses to write).
+ . /lib/baseline/mtd.sh
+ P=/run/persist
+@@ -62,11 +63,24 @@ case ${1:-} in
+         rc=1
+         if [ -z "$DR" ]; then
+             echo "persist: $WHERE, nothing loaded"
+-        elif tar -xf "$DR" -C "$P" 2>/dev/null; then
+-            echo "persist: loaded from $WHERE"
+-            rc=0
+         else
+-            echo "persist: $WHERE holds no persist archive (erased, or another system's data)"
++            # U2AC: unpack into a scratch dir and keep it only when tar read the whole archive. A power cut
++            # during `save` leaves a valid start and 0xFF after it: tar would have extracted the files before
++            # the cut, one of them with 0xFF bytes in it (tar has no data checksum), and that state would
++            # then be taken as good. All or nothing: a broken archive loads nothing (= "archive lost").
++            # (mv, not cp: the recovery busybox has no cp)
++            rm -rf "$P.load"; mkdir -p "$P.load"
++            if tar -xf "$DR" -C "$P.load" 2>/dev/null; then
++                for _e in "$P.load"/* "$P.load"/.[!.]*; do
++                    [ -e "$_e" ] || continue
++                    rm -rf "$P/${_e##*/}"; mv "$_e" "$P/"
++                done
++                echo "persist: loaded from $WHERE"
++                rc=0
++            else
++                echo "persist: $WHERE holds no complete persist archive (erased, cut short by a power loss, or another system's data): nothing loaded"
++            fi
++            rm -rf "$P.load"
+         fi
+         seed_shadow
+         exit $rc
+@@ -74,6 +88,10 @@ case ${1:-} in
      save)
          [ -n "$REC" ] && { echo "persist: recovery never writes the customer MTD" >&2; exit 1; }
          [ -n "$D" ] || { echo "persist: $WHERE" >&2; exit 1; }

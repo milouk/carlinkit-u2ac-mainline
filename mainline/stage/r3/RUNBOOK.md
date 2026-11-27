@@ -57,7 +57,8 @@ boot is the rootfs again. The old persistent CCPABOOT mark is now only flash-roo
 Mode detection: "computer on USB" = usb0 carrier + 192.168.50.100 answers ARP (or ping). A head unit that
 runs cdc_ncm + DHCP (some Linux/Android units) would look like a computer and stay in maintenance: fix it
 from the phone over Wi-Fi, web UI -> Mode -> "Android Auto always" (`u2ac-aa dev aa`). Note the guard: rcS
-marks a boot good once NCM + ssh are up, so a rootfs that boots but is unreachable later is NOT caught by it.
+marks a boot good once NCM + ssh are up (on a car, or with no host within 1.5 s, once the USB probe has
+decided: no NCM then), so a rootfs that boots but is unreachable later is NOT caught by it.
 Escape for that case (no NCM, no AP, no UART input): Pi + SOIC clip, `mainline/rescue/FORCE_RECOVERY_SPI.sh`
 (copy to the Pi's ~/u2ac_rescue, writes ONLY the bootstate block 0xFF0000 = CCPABOOT -> next boot = recovery,
 two-read + U-Boot identity checks, read-back verify). Tested against a fake flashrom: only that block changes.
@@ -81,8 +82,8 @@ it AOA GET_PROTOCOL at once (SYNC 3: 33 ms after SET_CONFIGURATION), a computer 
   phone is in.
 - `noaoa` (configured, 3 s silent): NCM as before and u2ac-aa's carrier/ARP test. A car there (one that waits
   for the driver before AOA) gets NCM taken off the port at once.
-- `none` (nobody configured it within 4 s: a car still booting): rcS goes on without NCM, the probe keeps the
-  port until 10 s. A late host is then a car (`car`) or gets NCM (`noaoa`, `/run/u2ac-usbprobe.how` = noaoa-late).
+- `none` (nobody configured it within 1.5 s: a car still booting): rcS goes on (and marks the boot slot)
+  without NCM, the probe keeps the port until 10 s. A late host is then a car (`car`) or gets NCM (`noaoa`, `/run/u2ac-usbprobe.how` = noaoa-late).
 - `dev` (dev mode) or `failed` (the probe could not run): NCM exactly as before.
 Measured on the unit in RAM 2026-11-27: the Mac configures it after 224 ms, `noaoa` at 3.2 s, NCM back.
 A pyusb head unit got [2, 0] and the device left the bus 0.2 s later. Maintenance on a computer takes ~3.5 s
@@ -110,7 +111,9 @@ A phone that refuses the policy (older Android) is disconnected and left alone.
 
 ## Flight recorder (car runs survive the ignition)
 Car mode writes the logs (u2ac-aa, aa-proxy-rs, bluetoothd, hostapd, dmesg, TCP/USB state) gzip'd into the last
-1 MiB of the rootfs MTD (8 slots x 128 KiB, oldest reused, squashfs bytes_used checked before every write):
+1 MiB of the rootfs MTD (board.env FLIGHTLOG_SIZE, which build.sh keeps the squashfs out of; 8 slots x 128 KiB,
+oldest reused, squashfs bytes_used checked before every write; the next slot is erased ahead of time outside
+a session, so the write inside one only programs pages, no erase stall):
 90 s after start, 60 s into each live AA session, 5 s after a session ends, every 2 min while no session if
 aa-proxy-rs logged. Back on the Mac (maintenance): `ssh root@192.168.50.2 u2ac-aa flightlog` (list),
 `u2ac-aa flightlog last` (or SEQ) prints one. Off: `: > /run/persist/u2ac-flightlog-off; persist save`.
@@ -137,7 +140,8 @@ dry run (car / computer / dev). Must end `selftest: 0 failure(s)`.
 
 ## Known limits (reviewed 2026-11-27, not fixed on purpose)
 - Recovery is not left on its own within one power cycle: 3 boots in a row cut off before rcS marks them good
-  (~5-6 s after power-on: NCM + ssh up, no host needed) make the 4th boot a recovery visit, and recovery waits
+  (~5-6 s after power-on: the USB probe decided, then NCM + ssh up or no NCM) make the 4th boot a recovery
+  visit, and recovery waits
   for a computer. The next power cycle boots the rootfs again (the visit resets the count). Any boot that gets
   past rcS resets the count, so it takes 3 consecutive cut-short boots. Fixing it = the recovery init, i.e. a
   kernel flash.
@@ -145,6 +149,8 @@ dry run (car / computer / dev). Must end `selftest: 0 failure(s)`.
   ("tokio runtime has not ticked"), not killed. The supervisor restarts it only when it exits.
 - Power cut during a persist write loses the archive (pairings): writes happen only when something changed
   (verified: a full phone session leaves BlueZ's info/attributes/settings byte-identical, only cache/ changes).
+  `persist load` restores an archive completely or not at all (selftest 2c), never the part written before
+  the cut, and a save before `state_restore` ran (radios failed at boot) keeps the archived pairings.
 - The repo rebuilds the flashed rootfs: fresh upstream OCBM_BASE + ocbm-u2ac.patch -> identical tree (626
   entries, contents, links, modes. 2026-11-27). Only file times differ (mksquashfs keeps checkout mtimes).
 

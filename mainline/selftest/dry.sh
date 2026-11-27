@@ -64,6 +64,11 @@ printf '\000\220\235\000\000\000\000\000' | dd of=$MTD_DEV/mtd3 bs=1 seek=40 con
 printf '#!/bin/sh\ntr "\\000" "\\377" < /dev/zero | head -c $(($3 * 65536)) | dd of="$1" bs=65536 seek=$(($2 / 65536)) conv=notrunc 2> /dev/null\n' > /fake/erase
 chmod +x /fake/erase
 SQ0=$(head -c 11927552 $MTD_DEV/mtd3 | md5sum | cut -d' ' -f1)
+# a save BEFORE state_restore (the radios failed at boot, then `u2ac-aa persist` / `dev on` by hand) must keep
+# the archived pairing, not mirror the (absent) live dirs over it
+u2ac-aa persist > /dev/null 2>&1
+[ -s /run/persist/bluetooth/38:BA:B0:AA:BB:CC/11:22:33:44:55:66/info ] && echo "--- pre-restore save keeps pairings: yes" \
+    || echo "--- pre-restore save keeps pairings: NO"
 T0=$(cut -d. -f1 /proc/uptime)
 timeout 60 u2ac-aa start; echo "start rc=$?"
 sleep 1
