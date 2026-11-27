@@ -156,6 +156,15 @@ dry run (car / computer / dev). Must end `selftest: 0 failure(s)`.
   aa-build patch 0005 (wrap-up in the background), "BT: address set" stamp, hostapd -t timestamps.
 - Not ours: the phone's hotspot join (two associations per start in both logs) and SYNC's projection start.
 
+## Boot I/O: zstd-packed relay, slow NOR (measured 2026-11-28)
+- NOR reads at 2.8 MB/s (`dd /dev/mtd3`, 6 MB in 2.14 s: single SPI at 29 MHz, CPU copies). xz decoding of the
+  15.7 MB aa-proxy-rs took another 2.75 s at 900 MHz. Now the image keeps it zstd-packed (board.env ZSTD_PACK,
+  /usr/lib/zbin/aa-proxy-rs.zst 5.95 MB, /usr/bin/aa-proxy-rs -> /run/zbin) and u2ac-aa's zbin_unpack unpacks it
+  first thing at boot with u2ac-unzstd (0.86 s): ~4.5 s -> ~3.0 s of CPU. Rootfs 11.04 MB (limit 11.93 MB).
+- Not done: Thumb-2 build (-20% binary, only 0.25 s less xz, worse BCJ), CPU overclock (900 MHz = the top fused
+  grade, beyond is out of spec), NOR at 50 MHz / quad (kernel DT flash; chip id c22018 = MX25L12805D, no SFDP
+  exposed, quad unproven).
+
 ## Car-off sleep (u2ac-aa car_sleep; web Options "Sleep when the car is off", flag u2ac-sleep-off)
 - After a live AA session, once the car has not used the USB port (UDC not "configured") for 90 s
   (`U2AC_SLEEP_S`) and no session runs: aa-proxy-rs stopped (no more Bluetooth calls pulling the phone onto

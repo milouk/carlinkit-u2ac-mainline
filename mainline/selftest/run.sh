@@ -119,6 +119,9 @@ sleep 1; docker exec u2ac-selftest-web sh -c 'grep -q "u2ac-aa persist" /run/stu
 docker rm -f u2ac-selftest-web > /dev/null 2>&1
 
 # 4
+# the aa-proxy-rs the image packs (zstd): the board overlay's binary, byte for byte after the boot's unpack
+AAB=$D/../ocbm/baseline/arm-imx6ul-u2ac/rootfs/usr/bin/aa-proxy-rs
+AAMD5=$( (md5sum "$AAB" 2> /dev/null || md5 -r "$AAB") | cut -c1-32)
 for sc in car carncm computer dev; do
   out=$(run_arm --privileged -v "$W:/o:ro" -e SCEN=$sc "$TAG" /bin/sh /o/dry.sh 2>&1)
   # car: the probe saw AOA (NCM never up); carncm: no AOA in time, NCM came up, u2ac-aa empties the port
@@ -157,6 +160,8 @@ for sc in car carncm computer dev; do
      && echo "$out" | grep -q -- '--- known_devices: 11:22:33:44:55:66 ' \
      && echo "$out" | grep -q -- '--- flightlog guard: flight log: no area'; then ok "start dry run: $sc"
   else bad "start dry run: $sc"; echo "$out" | sed -n '/--- u2ac-aa.log/,/--- stub/p'; echo "$out" | grep -- '^--- \(flightlog\|squashfs\|led\|known\)'; fi
+  echo "$out" | grep -q -- "--- zbin: $AAMD5 done=yes" && ok "zstd-packed relay unpacked intact: $sc" \
+    || { bad "zstd-packed relay: $sc"; echo "$out" | grep -- '--- zbin'; }
   # health exporter (u2ac-metrics): valid text, no MAC, the boot phases / daemons / station / repairs present
   echo "$out" | grep -q -- '--- metrics: [1-9][0-9]* samples, 0 bad, 0 dup, 0 outside' \
     && echo "$out" | grep -q -- '--- metrics macs: 0' \

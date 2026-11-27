@@ -126,6 +126,8 @@ grep 'watch:' /run/log/u2ac-aa.log
 u2ac-metrics > /tmp/metrics.txt 2> /tmp/metrics.err
 sh /o/metricscheck.sh /tmp/metrics.txt
 grep -E '^u2ac_(boot_phase_seconds\{phase="bt"\}|process_up\{name="bluetoothd"\}|wifi_station_signal_dbm|wifi_channel |radio_repairs_total\{what="hostapd"\}|aa_proxy_rss_bytes)' /tmp/metrics.txt | sed 's/^/metric: /'
+# zstd-packed aa-proxy-rs (board.env ZSTD_PACK): start's zbin_unpack, the image's own u2ac-unzstd
+echo "--- zbin: $(md5sum /run/zbin/aa-proxy-rs 2> /dev/null | cut -c1-32) done=$([ -e /run/zbin/.done ] && echo yes || echo no) link=$(readlink /usr/lib/zbin/../../bin/aa-proxy-rs 2> /dev/null)"
 echo "--- status:"; u2ac-aa status
 echo "--- persisted:"; ls -la /run/persist
 # car-off sleep (u2ac-aa car_sleep): a live AA session (a real TCP session on 5288 + the accessory gadget

@@ -1,9 +1,9 @@
 diff --git a/baseline/arm-imx6ul-u2ac/board.env b/baseline/arm-imx6ul-u2ac/board.env
 new file mode 100644
-index 0000000..b0397be
+index 0000000..3dc21c8
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/board.env
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,83 @@
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# CPC200-CCPA (i.MX6ULL, 128 MiB, 16 MiB QSPI NOR, vendor HAB U-Boot kept). POSIX sh. Sourced by
 +# baseline/build.sh on the build host and installed as /etc/baseline/board.env in the recovery
@@ -75,6 +75,9 @@ index 0000000..b0397be
 +FLIGHTLOG_SIZE=1048576
 +SQUASHFS_COMP=xz                 # U2AC: zstd did not fit (15.0 MB vs 12.4 MB partition); xz + ARM BCJ, 256K blocks
 +SQUASHFS_OPTS="-Xbcj arm -b 262144"
++# aa-proxy-rs (15.7 MB) zstd-packed (5.95 MB stored, ~1.1 MB more flash than inside the xz squashfs): u2ac-aa
++# unpacks it to /run/zbin at boot in ~0.3 s instead of 2.75 s of xz decoding (measured on the unit)
++ZSTD_PACK="usr/bin/aa-proxy-rs"
 +# U2AC kernel pin override (2026-11-26 trial): latest stable. sha256 from cdn.kernel.org sha256sums.asc over HTTPS.
 +KVER=${U2AC_KVER:-7.2.15}
 +case $KVER in
@@ -203094,10 +203097,10 @@ index 0000000..8114b82
 \ No newline at end of file
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
 new file mode 100755
-index 0000000..b2e2fe9
+index 0000000..bc31d52
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
-@@ -0,0 +1,861 @@
+@@ -0,0 +1,879 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# u2ac-aa start|stop|status|persist|aa-now|watch|dev on|off|aa|flightlog [last|SEQ]  (Carlinkit U2AC, milouk 2026-11-26)
@@ -203429,6 +203432,21 @@ index 0000000..b2e2fe9
 +    httpd -p 192.168.50.2:80 -h /usr/share/u2ac/www && echo "$(pgrep -n -x httpd)" > /run/httpd-usb.pid
 +}
 +
++# zbin_unpack: board.env ZSTD_PACK executables (/usr/lib/zbin/NAME.zst, linked from their path to /run/zbin/NAME)
++# into RAM, once a boot; /run/zbin/.done when finished (aa_run waits for it)
++zbin_unpack() {
++    mkdir -p /run/zbin
++    for _z in /usr/lib/zbin/*.zst; do
++        [ -e "$_z" ] || continue
++        _n=${_z##*/}; _n=${_n%.zst}
++        [ -x "/run/zbin/$_n" ] && continue
++        if u2ac-unzstd < "$_z" > "/run/zbin/$_n.tmp" && chmod 0755 "/run/zbin/$_n.tmp"; then
++            mv -f "/run/zbin/$_n.tmp" "/run/zbin/$_n"
++        else rm -f "/run/zbin/$_n.tmp"; say "zbin: unpacking $_n FAILED"; fi
++    done
++    : > /run/zbin/.done
++}
++
 +# aa-proxy-rs supervised: restarted if it dies, protected from the OOM killer, slight CPU priority
 +aa_run() {
 +    (
@@ -203445,6 +203463,10 @@ index 0000000..b2e2fe9
 +        # `: > /run/persist/u2ac-hfp-guard-off; persist save`
 +        [ -e "$P/u2ac-hfp-guard-off" ] || export AA_HFP_GUARD=1
 +        cd /run/data
++        # its binary unpacked into RAM by start's zbin_unpack (max 10 s)
++        if [ -d /usr/lib/zbin ]; then
++            _n=0; until [ -e /run/zbin/.done ] || [ $_n -ge 100 ]; do sleep 0.1; _n=$((_n + 1)); done
++        fi
 +        # restart at once after a crash in a long run (2 s), back off up to 30 s when it keeps dying young (a
 +        # bad config would otherwise start the 15 MB binary every 2 s on the single core all drive)
 +        _d=2
@@ -203786,6 +203808,8 @@ index 0000000..b2e2fe9
 +    : > "$LOG"
 +    say "start"
 +    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$g" 2>/dev/null; done
++    # the image's zstd-packed executables (aa-proxy-rs) into RAM first: 0.3 s of zstd, not 2.75 s of xz
++    zbin_unpack &
 +    echo 1 > /proc/sys/vm/overcommit_memory   # aa-proxy-rs reserves ~1 GiB of address space up front
 +    echo 4096 > /proc/sys/vm/min_free_kbytes  # keep atomic-allocation headroom for SDIO/USB/net (no compaction)
 +    mount -o remount,size=24m /tmp 2>/dev/null
@@ -203813,10 +203837,7 @@ index 0000000..b2e2fe9
 +    # priority (wasted only in dev mode)
 +    ( pgrep -x dbus-daemon > /dev/null || { rm -f /run/dbus-daemon.pid; dbus-daemon --system --fork; }
 +      cat /usr/libexec/bluetooth/bluetoothd /usr/bin/btmgmt /usr/lib/libglib-2.0.so.0 /usr/lib/libpcre2-8.so.0 \
-+          > /dev/null 2>&1
-+      [ -e "$P/u2ac-dev" ] && exit 0
-+      read -r me _ < /proc/self/stat; renice -n 10 -p "$me" > /dev/null 2>&1
-+      cat /usr/bin/aa-proxy-rs > /dev/null ) &
++          > /dev/null 2>&1 ) &
 +    radio_up || { say "radio did not come up (dmesg)"; led 69480f 1000 500; return 1; }
 +    say "radios up"
 +    watch_init
@@ -207042,6 +207063,103 @@ index 0000000..31dee4e
 +</script>
 +</body>
 +</html>
+diff --git a/baseline/arm-imx6ul-u2ac/tools-zstd/u2ac-unzstd.c b/baseline/arm-imx6ul-u2ac/tools-zstd/u2ac-unzstd.c
+new file mode 100644
+index 0000000..466e01e
+--- /dev/null
++++ b/baseline/arm-imx6ul-u2ac/tools-zstd/u2ac-unzstd.c
+@@ -0,0 +1,91 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++ * u2ac-unzstd < IN.zst > OUT: zstd decompression only (libzstd's decoder, linked statically by the baseline
++ * build's build_unzstd). The image keeps the executables listed in board.env ZSTD_PACK zstd-packed: the xz
++ * squashfs cost aa-proxy-rs 2.75 s of decoding on the single A7 core at every boot, zstd ~10x less.
++ * u2ac-aa unpacks them into /run/zbin first thing at boot. Exit 0 only for a complete frame.
++ */
++#include <errno.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include "zstd.h"
++
++static int write_all(int fd, const char *p, size_t n)
++{
++    while (n) {
++        ssize_t w = write(fd, p, n);
++        if (w < 0) {
++            if (errno == EINTR)
++                continue;
++            return -1;
++        }
++        p += w;
++        n -= (size_t)w;
++    }
++    return 0;
++}
++
++int main(int argc, char **argv)
++{
++    (void)argv;
++    if (argc > 1) {
++        fputs("usage: u2ac-unzstd < IN.zst > OUT\n", stderr);
++        return 2;
++    }
++    size_t isz = ZSTD_DStreamInSize(), osz = ZSTD_DStreamOutSize();
++    char *ib = malloc(isz), *ob = malloc(osz);
++    ZSTD_DCtx *d = ZSTD_createDCtx();
++    if (!ib || !ob || !d) {
++        fputs("u2ac-unzstd: out of memory\n", stderr);
++        return 1;
++    }
++    size_t left = 1; /* ZSTD_decompressStream's return: 0 = a frame ended exactly here */
++    int any = 0;
++    for (;;) {
++        ssize_t r = read(0, ib, isz);
++        if (r < 0) {
++            if (errno == EINTR)
++                continue;
++            perror("u2ac-unzstd: read");
++            return 1;
++        }
++        if (r == 0)
++            break;
++        any = 1;
++        ZSTD_inBuffer in = { ib, (size_t)r, 0 };
++        while (in.pos < in.size) {
++            ZSTD_outBuffer out = { ob, osz, 0 };
++            left = ZSTD_decompressStream(d, &out, &in);
++            if (ZSTD_isError(left)) {
++                fprintf(stderr, "u2ac-unzstd: %s\n", ZSTD_getErrorName(left));
++                return 1;
++            }
++            if (write_all(1, ob, out.pos)) {
++                perror("u2ac-unzstd: write");
++                return 1;
++            }
++        }
++    }
++    /* input consumed: flush what the decoder still holds */
++    while (any && left != 0) {
++        ZSTD_inBuffer in = { ib, 0, 0 };
++        ZSTD_outBuffer out = { ob, osz, 0 };
++        left = ZSTD_decompressStream(d, &out, &in);
++        if (ZSTD_isError(left)) {
++            fprintf(stderr, "u2ac-unzstd: %s\n", ZSTD_getErrorName(left));
++            return 1;
++        }
++        if (out.pos == 0)
++            break;
++        if (write_all(1, ob, out.pos)) {
++            perror("u2ac-unzstd: write");
++            return 1;
++        }
++    }
++    if (!any || left != 0) {
++        fputs("u2ac-unzstd: truncated or empty input\n", stderr);
++        return 1;
++    }
++    ZSTD_freeDCtx(d);
++    return 0;
++}
 diff --git a/baseline/arm-imx6ul-u2ac/tools/stage_kernel.py b/baseline/arm-imx6ul-u2ac/tools/stage_kernel.py
 new file mode 100755
 index 0000000..64484e5
@@ -207920,7 +208038,7 @@ index 0000000..76de338
 +    return 0;
 +}
 diff --git a/baseline/build.sh b/baseline/build.sh
-index 3f3ea52..1fe7334 100755
+index 3f3ea52..fc29f0d 100755
 --- a/baseline/build.sh
 +++ b/baseline/build.sh
 @@ -91,7 +91,7 @@ done
@@ -207950,7 +208068,15 @@ index 3f3ea52..1fe7334 100755
  }
  
  step_fetch() {
-@@ -235,14 +235,21 @@ kernel_src() {
+@@ -205,6 +205,7 @@ step_fetch() {
+     fetch_pinned openssh "$OPENSSH_URL" "$OPENSSH_SHA256" "openssh-$OPENSSH_VER.tar.gz"
+     [ "$MTD_UTILS" = 1 ] && fetch_pinned mtd-utils "$MTD_UTILS_URL" "$MTD_UTILS_SHA256" "mtd-utils-$MTD_UTILS_VER.tar.bz2"
+     [ "$EXFATPROGS" = 1 ] && fetch_pinned exfatprogs "$EXFATPROGS_URL" "$EXFATPROGS_SHA256" "exfatprogs-$EXFATPROGS_VER.tar.gz"
++    [ -n "${ZSTD_PACK:-}" ] && fetch_pinned zstd "$ZSTD_URL" "$ZSTD_SHA256" "zstd-$ZSTD_VER.tar.gz"
+     if [ "$RADIO_TOOLS" = 1 ]; then
+         fetch_pinned libnl "$LIBNL_URL" "$LIBNL_SHA256" "libnl-$LIBNL_VER.tar.gz"
+         fetch_pinned iw "$IW_URL" "$IW_SHA256" "iw-$IW_VER.tar.xz"
+@@ -235,14 +236,21 @@ kernel_src() {
          note "linux $KVER source -> $KDIR"
          untar "$SRC/linux-$KVER.tar.xz" "$KDIR"
      fi
@@ -207975,7 +208101,7 @@ index 3f3ea52..1fe7334 100755
                  (cd "$KDIR" && patch -p1 -N -r- -s < "$p") \
                      || (cd "$KDIR" && patch -p1 -R --dry-run -s < "$p" > /dev/null) \
                      || die "patch $(basename "$p") failed; remove $KDIR to start from a clean tree"
-@@ -252,7 +259,8 @@ kernel_src() {
+@@ -252,7 +260,8 @@ kernel_src() {
      fi
      note "board DTS into $DTS_DIR, one top-level DTS per radio ($DTS_NAME-<radio>.dts)"
      x cp -f "$HERE/$BOARD/dts/$DTS_NAME.dts" "$HERE/$BOARD/dts/imx6ull-ccpa-usbhost.dtsi" "$DTS_DIR/"
@@ -207985,7 +208111,7 @@ index 3f3ea52..1fe7334 100755
          x cp -f "$HERE/$BOARD/dts/radio-$r.dtsi" "$DTS_DIR/imx6ull-ccpa-radio-$r.dtsi"
          xsh "printf '%s\\n' '// generated by baseline/build.sh: the board DTS plus the $r radio node' \
               '#include \"$DTS_NAME.dts\"' '#include \"imx6ull-ccpa-radio-$r.dtsi\"' > '$DTS_DIR/$DTS_NAME-$r.dts'"
-@@ -312,7 +320,8 @@ initramfs_list() { # writes $OUTV/initramfs.list
+@@ -312,7 +321,8 @@ initramfs_list() { # writes $OUTV/initramfs.list
              echo "file /usr/sbin/dropbearmulti $UOUT/usr/sbin/dropbearmulti 0755 0 0"
              echo "slink /usr/sbin/dropbear dropbearmulti 0777 0 0"
              for b in dropbearkey scp dbclient; do echo "slink /usr/bin/$b ../sbin/dropbearmulti 0777 0 0"; done
@@ -207995,7 +208121,7 @@ index 3f3ea52..1fe7334 100755
              for f in passwd group shells profile; do echo "file /etc/$f $R/$f 0644 0 0"; done
              echo "file /etc/baseline/shadow.default $OUTV/shadow.default 0600 0 0"
              [ "$ROOT_PASSWORD_HASH" = "$DEV_PASSWORD_HASH" ] && echo "file /etc/baseline/dev-password $OUTV/empty 0644 0 0"
-@@ -371,6 +380,8 @@ build_kernel() {
+@@ -371,6 +381,8 @@ build_kernel() {
      [ "$USB_HOST" = 1 ] && STRICT="$STRICT $K/usb-host.fragment"
      [ "$USB_VFAT_BUILTIN" = 1 ] && STRICT="$STRICT $K/usb-vfat-builtin.fragment"
      [ "$RECOVERY_USB" = 1 ] && [ "$RECOVERY_EXFAT" = 1 ] && STRICT="$STRICT $K/exfat-builtin.fragment"
@@ -208004,7 +208130,7 @@ index 3f3ea52..1fe7334 100755
      STRICT="$STRICT $OUTV/initramfs.fragment"
      xsh "echo 'CONFIG_INITRAMFS_SOURCE=\"$OUTV/initramfs.list\"' > '$OUTV/initramfs.fragment'"
      note "kconfig: allnoconfig + $(echo "$STRICT $K/base-optional.fragment" | sed "s|$HERE/||g; s|$OUTV/||g")"
-@@ -388,6 +399,18 @@ build_kernel() {
+@@ -388,6 +400,18 @@ build_kernel() {
      ZI=$KOBJ/arch/arm/boot/zImage
      x make -C "$KDIR" O="$KOBJ" ARCH="$KARCH" CROSS_COMPILE="$CROSS_COMPILE" INSTALL_MOD_PATH="$OUTV/modules" \
          INSTALL_MOD_STRIP=1 DEPMOD="$(command -v depmod || echo depmod)" modules_install
@@ -208023,18 +208149,22 @@ index 3f3ea52..1fe7334 100755
      if [ "$DRY" = 1 ]; then
          for r in $RADIOS; do printf '+ cat zImage %s.dtb > %s\n' "$DTS_NAME-$r" "$OUTV/ccpa-baseline-$r.zimg"; done
          printf '+ check: size(zImage) + size(DTB) <= KERNEL_MAX %s B (0x302fd8) for each, else this variant fails\n' "$KERNEL_MAX"
-@@ -525,6 +548,10 @@ step_rootfs() {
+@@ -525,6 +549,14 @@ step_rootfs() {
      # file against the musl sysroot of that tree) instead of a full userspace rebuild
      [ "$DRY" = 1 ] || [ -x "$UOUT/usr/sbin/ocbm-accessory" ] || build_ocbm_accessory
      x cp "$UOUT/usr/sbin/ocbm-accessory" "$W/usr/sbin/ocbm-accessory"
 +    [ "$DRY" = 1 ] || build_board_tools
++    if [ -n "${ZSTD_PACK:-}" ]; then
++        [ "$DRY" = 1 ] || build_unzstd
++        x cp "$UOUT/usr/sbin/u2ac-unzstd" "$W/usr/sbin/"
++    fi
 +    for _c in "$HERE/$BOARD"/tools/*.c; do
 +        [ -f "$_c" ] && x cp "$UOUT/usr/sbin/$(basename "$_c" .c)" "$W/usr/sbin/"
 +    done
      if [ "$RADIO_TOOLS" = 1 ]; then
          # revision 8: hostapd joins the radio tools; an older userspace tree gets it built here
          [ "$DRY" = 1 ] || [ -x "$UOUT/usr/sbin/hostapd" ] || build_hostapd
-@@ -536,6 +563,10 @@ step_rootfs() {
+@@ -536,6 +568,10 @@ step_rootfs() {
      note "overlays: common/rootfs, $BOARD/rootfs, shared scripts, /etc/baseline (no .DS_Store / ._*)"
      x cp -R "$HERE/common/rootfs/." "$W/"
      [ -d "$HERE/$BOARD/rootfs" ] && x cp -R "$HERE/$BOARD/rootfs/." "$W/"
@@ -208045,7 +208175,7 @@ index 3f3ea52..1fe7334 100755
      if [ "$RADIO_TOOLS" != 1 ]; then
          # the helpers would only say that their tools are missing
          x rm -f "$W/usr/sbin/wifi-connect" "$W/usr/sbin/wifi-scan" "$W/usr/sbin/bt-scan" "$W/etc/baseline/udhcpc.sh"
-@@ -567,6 +598,8 @@ step_rootfs() {
+@@ -567,6 +603,8 @@ step_rootfs() {
      # -type f: the busybox applet links need nothing, and the OCBM overlay links dangle in the image
      xsh "chmod 0755 '$W/init' '$W/etc/init.d/rcS' && find '$W/usr/sbin' -type f -exec chmod 0755 {} +"
      [ "$RADIO_TOOLS" = 1 ] && x chmod 0755 "$W/etc/baseline/udhcpc.sh"
@@ -208054,7 +208184,25 @@ index 3f3ea52..1fe7334 100755
      note "kernel modules of variant $V (radio + storage; nothing loads them at boot)"
      xsh "cp -R '$OUTV/modules/lib/modules/.' '$W/lib/modules/' && rm -f '$W'/lib/modules/*/build '$W'/lib/modules/*/source"
      if [ "$RADIO_MODULES" = 1 ] && [ "$RADIO_FW" = 1 ]; then
-@@ -586,7 +619,7 @@ step_rootfs() {
+@@ -577,6 +615,17 @@ step_rootfs() {
+         done
+         xsh "tar -xJf '$SRC/wireless-regdb-$REGDB_VER.tar.xz' -C '$TOP' && cp '$TOP/wireless-regdb-$REGDB_VER/regulatory.db' '$W/lib/firmware/'"
+     fi
++    if [ -n "${ZSTD_PACK:-}" ]; then
++        # board.env ZSTD_PACK: big executables kept zstd-packed (/usr/lib/zbin/NAME.zst, stored as is by the xz
++        # squashfs: incompressible) and linked from their path to /run/zbin/NAME, where the board unpacks them
++        # at boot (xz squashfs decoding is the slow part of a cold start on a small core)
++        note "zstd-packed executables: $ZSTD_PACK"
++        x mkdir -p "$W/usr/lib/zbin"
++        for f in $ZSTD_PACK; do
++            n=$(basename "$f")
++            xsh "zstd -q -19 --no-progress -f -o '$W/usr/lib/zbin/$n.zst' '$W/$f' && rm -f '$W/$f' && ln -s '/run/zbin/$n' '$W/$f'"
++        done
++    fi
+     note "checks: no .DS_Store/._* left, etc/mdev.conf present, every rootfs script parses"
+     xsh "[ -z \"\$(find '$W' \( -name .DS_Store -o -name '._*' \) -print)\" ]" || die "a macOS metadata file is still in $W"
+     xsh "[ -s '$W/etc/mdev.conf' ]" || die "no etc/mdev.conf: mdev's default rule would chmod every node in /dev"
+@@ -586,7 +635,7 @@ step_rootfs() {
               head -c 2 \"\$s\" | grep -q '#!' && { sh -n \"\$s\" || exit 1; }; done; true" || die "a rootfs script does not parse"
      note "mksquashfs (xz, all-root, no xattrs; LIVI's flags)"
      x rm -f "$IMGR"
@@ -208063,7 +208211,7 @@ index 3f3ea52..1fe7334 100755
      if [ "$DRY" = 1 ]; then
          printf '+ check: size(rootfs.img) <= %s B (0xc60000), <= %s B (the OCBM overlay region, board.env) and a multiple of 4096\n' "$ROOTFS_PART_SIZE" "${OVERLAY_OFFSET:-$ROOTFS_PART_SIZE}"
          printf '+ write %s.sha256\n' "$IMGR"
-@@ -597,6 +630,10 @@ step_rootfs() {
+@@ -597,6 +646,10 @@ step_rootfs() {
      # revision 8: the end of the partition is the OCBM overlay region; a squashfs reaching into it would
      # overwrite the overlay at the next flash-rootfs (and ocbm-overlay refuses to write beside it)
      [ "$size" -le "${OVERLAY_OFFSET:-$ROOTFS_PART_SIZE}" ] || die "rootfs is $size B, past the OCBM overlay region at $OVERLAY_OFFSET (board.env)"
@@ -208107,10 +208255,10 @@ index 20d2e73..5e98134 100644
 +CONFIG_DEBUG_FILE=y
  CONFIG_NO_RANDOM_POOL=y
 diff --git a/baseline/common/recipes/userspace.sh b/baseline/common/recipes/userspace.sh
-index e370c96..0a2f135 100644
+index e370c96..7d48942 100644
 --- a/baseline/common/recipes/userspace.sh
 +++ b/baseline/common/recipes/userspace.sh
-@@ -193,6 +193,21 @@ build_ocbm_accessory() {
+@@ -193,6 +193,36 @@ build_ocbm_accessory() {
      assert_static "$UOUT/usr/sbin/ocbm-accessory"
  }
  
@@ -208129,10 +208277,25 @@ index e370c96..0a2f135 100644
 +    done
 +}
 +
++# zstd decoder only (board.env ZSTD_PACK): $BOARD/tools-zstd/u2ac-unzstd.c on libzstd's decompress sources,
++# -O2 (it runs on the boot's critical path), no assembly (x86 only), no legacy formats
++build_unzstd() {
++    : "${TARGET_CC:=$UBUILD/musl-sysroot/bin/musl-gcc}"
++    _s=$UBUILD/zstd-$ZSTD_VER
++    note "u2ac-unzstd (zstd $ZSTD_VER decoder, $BOARD/tools-zstd/u2ac-unzstd.c), static"
++    untar "$SRC/zstd-$ZSTD_VER.tar.gz" "$_s"
++    x mkdir -p "$UBUILD/board-tools" "$UOUT/usr/sbin"
++    x "$TARGET_CC" -fsyntax-only -Wall -Wextra -Werror -I"$_s/lib" "$HERE/$BOARD/tools-zstd/u2ac-unzstd.c"
++    xsh "cd '$_s/lib' && '$TARGET_CC' -static -O2 -DZSTD_DISABLE_ASM -DZSTD_LEGACY_SUPPORT=0 -I. -Icommon \
++         -o '$UBUILD/board-tools/u2ac-unzstd' '$HERE/$BOARD/tools-zstd/u2ac-unzstd.c' common/*.c decompress/*.c"
++    x "${CROSS_COMPILE}strip" -o "$UOUT/usr/sbin/u2ac-unzstd" "$UBUILD/board-tools/u2ac-unzstd"
++    assert_static "$UOUT/usr/sbin/u2ac-unzstd"
++}
++
  # ----------------------------------------------------------------- radio tools (RADIO_TOOLS=1)
  # Libraries only these tools use go to their own prefix, never into the musl sysroot.
  RADIO_SYSROOT=${UBUILD:-}/radio-sysroot
-@@ -255,10 +270,13 @@ build_hostapd() {
+@@ -255,10 +285,13 @@ build_hostapd() {
      x cp "$HERE/common/hostapd/hostapd.config" "$_s/hostapd/.config"
      xsh "printf '%s\\n' 'LIBS += -L$RADIO_SYSROOT/lib' >> '$_s/hostapd/.config'"
      xsh "cd '$_s/hostapd' && CFLAGS='-MMD -Os -Wall' LDFLAGS=-static EXTRALIBS='-lnl-3' \
@@ -208350,3 +208513,19 @@ index c666608..ffb7e4d 100755
          tar -cf /run/persist.tar -C "$P" . || exit 1
          size=$(($(wc -c < /run/persist.tar)))
          if [ -n "${PERSIST_DEV:-}" ]; then
+diff --git a/baseline/common/versions.env b/baseline/common/versions.env
+index 43edf6d..452afef 100644
+--- a/baseline/common/versions.env
++++ b/baseline/common/versions.env
+@@ -72,6 +72,11 @@ EXFATPROGS_VER=1.4.3
+ EXFATPROGS_URL=https://github.com/exfatprogs/exfatprogs/releases/download/1.4.3/exfatprogs-1.4.3.tar.gz
+ EXFATPROGS_SHA256=4b5052cba6ff9f6dcb1c63eeeac328620472c5b0b3caf3d38e4ada50e75469d3
+ 
++# zstd decoder (board.env ZSTD_PACK set): u2ac-unzstd unpacks the executables the image keeps zstd-packed
++ZSTD_VER=1.5.7
++ZSTD_URL=https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
++ZSTD_SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
++
+ # Radio tools (RADIO_TOOLS=1): iw + wpa_supplicant/wpa_cli/wpa_passphrase on libnl, BlueZ btmgmt (readline,
+ # ncurses' libtinfo) and the deprecated hciconfig/hcitool. Never started at boot.
+ LIBNL_VER=3.12.0

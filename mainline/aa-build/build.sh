@@ -20,7 +20,8 @@ docker run --rm -v u2ac-aa-src:/src -v u2ac-aa-cargo:/usr/local/cargo/registry -
   [ \"\${RUSTLS_RING:-1}\" = 1 ] && sed -i 's/rustls::crypto::{aws_lc_rs, CryptoProvider}/rustls::crypto::{ring as aws_lc_rs, CryptoProvider}/' src/ssl_rustls.rs && grep -n 'ring as aws_lc_rs' src/ssl_rustls.rs
   # zig's compiler-rt provides __atomic_*; the build asks for -latomic, so give it an empty archive
   mkdir -p /tmp/atomic && python3 -m ziglang ar rcs /tmp/atomic/libatomic.a
-  export RUSTFLAGS=\"-L/tmp/atomic -C target-cpu=cortex-a7\"
+  export RUSTFLAGS=\"-L/tmp/atomic -C target-cpu=cortex-a7 ${RUSTFLAGS_EXTRA:-}\"
+  export CFLAGS_armv7_unknown_linux_musleabihf=\"${CFLAGS_EXTRA:-}\"
   export CARGO_PROFILE_RELEASE_OPT_LEVEL=${OPT:-s} CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
   cargo zigbuild --release --no-default-features --target armv7-unknown-linux-musleabihf 2>&1 | tail -15
   cp target/armv7-unknown-linux-musleabihf/release/aa-proxy-rs /out/aa-proxy-rs
