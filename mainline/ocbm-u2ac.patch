@@ -203097,10 +203097,10 @@ index 0000000..8114b82
 \ No newline at end of file
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
 new file mode 100755
-index 0000000..bc31d52
+index 0000000..16d9962
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
-@@ -0,0 +1,879 @@
+@@ -0,0 +1,881 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# u2ac-aa start|stop|status|persist|aa-now|watch|dev on|off|aa|flightlog [last|SEQ]  (Carlinkit U2AC, milouk 2026-11-26)
@@ -203808,8 +203808,10 @@ index 0000000..bc31d52
 +    : > "$LOG"
 +    say "start"
 +    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$g" 2>/dev/null; done
-+    # the image's zstd-packed executables (aa-proxy-rs) into RAM first: 0.3 s of zstd, not 2.75 s of xz
-+    zbin_unpack &
++    # the image's zstd-packed executables (aa-proxy-rs) into RAM: ~3 s of work (5.95 MB off the 2.8 MB/s NOR +
++    # 0.86 s of zstd) instead of ~4.5 s via the xz squashfs. Low priority: at full priority it held the radio
++    # bring-up back by that much (radios up 7.7 s -> 11.0 s, the flash 2026-11-28); aa_run waits for it
++    ( read -r me _ < /proc/self/stat; renice -n 10 -p "$me" > /dev/null 2>&1; zbin_unpack ) &
 +    echo 1 > /proc/sys/vm/overcommit_memory   # aa-proxy-rs reserves ~1 GiB of address space up front
 +    echo 4096 > /proc/sys/vm/min_free_kbytes  # keep atomic-allocation headroom for SDIO/USB/net (no compaction)
 +    mount -o remount,size=24m /tmp 2>/dev/null
