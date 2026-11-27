@@ -167,6 +167,13 @@ for sc in car carncm computer dev; do
     && echo "$out" | grep -q '^metric: u2ac_radio_repairs_total{what="hostapd"} 2' \
     && { [ $carish = 0 ] || echo "$out" | grep -q '^metric: u2ac_aa_proxy_rss_bytes [0-9]'; } \
     && ok "health exporter: $sc" || { bad "health exporter: $sc"; echo "$out" | grep -- '--- metrics\|^metric:\|^BAD\|^DUP\|^OUTSIDE'; }
+  # the relay starts early (before BT is up) only when the boot's probe saw a car
+  if [ $sc = car ]; then
+    echo "$out" | awk '/aa-proxy-rs started early/ { e = NR } /BT up/ { b = NR } END { exit !(e && b && e < b) }' \
+      && ok "early relay start: car (before BT up)" || { bad "early relay start: car"; echo "$out" | grep -E 'started early|BT up'; }
+  else
+    echo "$out" | grep -q 'aa-proxy-rs started early' && bad "early relay start in $sc" || ok "no early relay start: $sc"
+  fi
   # car-off sleep: after a live session the car stops using the port -> radios off, aa-proxy-rs stopped, the
   # port waits for a host (car modes only; maintenance/dev never sleep)
   if [ $carish = 1 ]; then sw='sleeping=yes aa=stopped bt_off=1 udc=\[\] led=000000 wake=waiting'; sm='^u2ac_sleeping 1'

@@ -203092,10 +203092,10 @@ index 0000000..8114b82
 \ No newline at end of file
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
 new file mode 100755
-index 0000000..2b41210
+index 0000000..b2e2fe9
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
-@@ -0,0 +1,852 @@
+@@ -0,0 +1,861 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# u2ac-aa start|stop|status|persist|aa-now|watch|dev on|off|aa|flightlog [last|SEQ]  (Carlinkit U2AC, milouk 2026-11-26)
@@ -203819,6 +203819,15 @@ index 0000000..2b41210
 +    say "radios up"
 +    watch_init
 +    state_restore
++    # A car on the port (the boot's USB probe saw AOA at once), or Android Auto forced: aa-proxy-rs starts now,
++    # in parallel with the AP and Bluetooth (it needs wlan0's MAC and the restored config, both here now). Its
++    # 15 MB binary took 3.5 s to page in when it was started after "BT up" (car runs 2026-11-28: first log line
++    # 3.5 s later, the phone called 0.9 s after that), and it retries the Bluetooth adapter every second until
++    # bluetoothd is up. Anything else (a computer, nobody, dev mode) waits for the computer test below.
++    early=0
++    if [ ! -e "$P/u2ac-dev" ] && { [ "$(cat /run/u2ac-usbprobe 2> /dev/null)" = car ] || [ -e "$P/u2ac-aa-force" ]; }; then
++        aa_run; early=1; say "aa-proxy-rs started early (a car on USB at boot), Bluetooth still coming up"
++    fi
 +    # BT bring-up (D-Bus, bluetoothd) in parallel with the AP
 +    bt_up &
 +    btp=$!
@@ -203831,7 +203840,7 @@ index 0000000..2b41210
 +        say "a computer is on the USB port: maintenance mode for this boot (NCM, ssh root@192.168.50.2); aa-proxy-rs not started"
 +        usb_httpd || say "web UI on USB not started (no 192.168.50.2 on usb0)"
 +    else
-+        aa_run
++        [ $early = 1 ] || aa_run
 +        say "aa-proxy-rs started (USB = Android Auto toward the car; ssh root@10.0.0.1 over AutoKit)"
 +    fi
 +    # steady state, one low-priority loop: every 5 s the CPU follows the AA session (cpu_mode); every 30 s
