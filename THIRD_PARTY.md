@@ -16,7 +16,7 @@ These are carried in the board's rootfs overlay so that the image builds without
 
 | Binary | Version | License | Source |
 |---|---|---|---|
-| `usr/bin/aa-proxy-rs` | v1.3.0 + patches 0001-0005 | MIT | built by `mainline/aa-build/build.sh v1.3.0` (static, armv7 musl) |
+| `usr/bin/aa-proxy-rs` | v1.3.0 + patches 0001-0006 | MIT | built by `mainline/aa-build/build.sh v1.3.0` (static, armv7 musl) |
 | `lib/libc.so.6`, `libm.so.6`, `ld-linux-armhf.so.3` | glibc 2.41 | LGPL-2.1-or-later | https://ftp.gnu.org/gnu/glibc/ |
 | `lib/libgcc_s.so.1` | GCC runtime | GPL-3.0 with the GCC Runtime Library Exception | https://gcc.gnu.org/ |
 | `usr/libexec/bluetooth/bluetoothd` | BlueZ 5.79 | GPL-2.0-or-later | https://www.kernel.org/pub/linux/bluetooth/ |

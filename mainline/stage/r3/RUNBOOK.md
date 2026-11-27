@@ -92,7 +92,12 @@ Measured on the unit in RAM 2026-11-27: the Mac configures it after 224 ms, `noa
 A pyusb head unit got [2, 0] and the device left the bus 0.2 s later. Maintenance on a computer takes ~3.5 s
 longer than before.
 
-## Hands-free guard: incoming calls on SYNC 3 (aa-build patch 0004)
+## Hands-free guard: incoming calls on SYNC 3 (aa-build patches 0004, 0006)
+- 0006 (2026-11-28): the guard starts right after the phone's AA Wireless RFCOMM is accepted (one guard at a time)
+  and the bootstrap no longer disconnects the phone (only the AA RFCOMM and the HSP stub close). Bench, real Pixel:
+  guard connected 3.9 s after the phone's Bluetooth, before its hotspot join (was after the whole bootstrap,
+  34 s after power-on in a car run, SYNC's own HFP ~20 s earlier). An AA restart still ends the guard and
+  disconnects the phone first (clean next handshake).
 Car test 2026-11-27: on an incoming call the caller could not hear the driver, outgoing calls were fine. The
 Pixel's own records (adb `dumpsys telecom`, `bluetooth_manager`) put every call on the car's hands-free link,
 never the dongle. The incoming one opened its audio link while still ringing (in-band ringing). SYNC 3's

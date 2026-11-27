@@ -27,15 +27,16 @@ modified. The new kernel goes in through the vendor's own kernel-staging path.
 
 ## Features
 
-- **Wireless Android Auto** through [aa-proxy-rs](https://github.com/aa-proxy/aa-proxy-rs) v1.3.0 with five
+- **Wireless Android Auto** through [aa-proxy-rs](https://github.com/aa-proxy/aa-proxy-rs) v1.3.0 with six
   [patches](mainline/aa-build/patches): cars that ask the driver before switching (e.g. Ford SYNC 3) get time to
   answer, head units that send no zero-length packets no longer stall, 16 KiB USB writes for video, the
-  hands-free guard, and the Bluetooth hand-off finishing in the background so the car gets USB about 2.5 s
-  sooner.
+  hands-free guard, the Bluetooth hand-off finishing in the background so the car gets USB about 2.5 s sooner,
+  and the guard starting with the Bluetooth hand-off instead of after it.
 - **USB to the car without out-of-tree code**: the Android Open Accessory handshake runs on mainline FunctionFS.
 - **Calls and microphone stay on the car's Bluetooth.** No call audio ever passes through the dongle.
-- **Hands-free guard**: the dongle stays connected to the phone as a second, silent hands-free device that tells
-  Android it must never take a call (Android's sink audio policy). With two hands-free devices connected, Android
+- **Hands-free guard**: from the first Bluetooth contact of each start, the dongle stays connected to the phone
+  as a second, silent hands-free device that tells Android it must never take a call (Android's sink audio
+  policy). With two hands-free devices connected, Android
   turns in-band ringing off for the car. Ford SYNC 3 loses the microphone of incoming calls when the phone rings
   in-band and the car is set to its own ringtone, and the car resets that setting every drive.
 - **Reconnects by itself**: every paired phone is dialled at boot. Pairings survive power cuts and are written to

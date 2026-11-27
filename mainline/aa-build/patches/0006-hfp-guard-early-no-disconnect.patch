@@ -1,0 +1,93 @@
+diff --git a/src/bluetooth.rs b/src/bluetooth.rs
+index c1bf90c..fbbc198 100644
+--- a/src/bluetooth.rs
++++ b/src/bluetooth.rs
+@@ -7989,6 +7989,14 @@ impl Bluetooth {
+         };
+         sdr_ui::set_current_phone_from_bt(&address.to_string(), phone_name);
+ 
++        // U2AC: the hands-free guard from here on, not after the whole Wi-Fi bootstrap. The car's own
++        // hands-free link is up long before (SYNC 3 connects 10-15 s after the ignition), and until a second
++        // hands-free unit is connected Android rings in-band on it: a call then loses the microphone. Started
++        // after the bootstrap it came up ~20 s after SYNC (car run 2026-11-28: 34 s after power-on).
++        if crate::hfp_guard::enabled() && !bt_poweroff {
++            crate::hfp_guard::spawn(self.adapter.clone(), bluer::Address(*address), need_restart.resubscribe());
++        }
++
+         Self::send_params(wifi_config.clone(), &mut stream).await?;
+ 
+         // Record this device as a known-good AA device (only when using wildcard connect)
+@@ -8174,9 +8182,13 @@ impl Bluetooth {
+                 // finish all bluetooth frames before disconnect
+                 tokio::time::sleep(Duration::from_millis(150)).await;
+                 // handshake complete, now disconnect the device so it should
+-                // connect to real HU for calls
+-                if let Ok(device) = adapter.device(addr) {
+-                    let _ = device.disconnect().await;
++                // connect to real HU for calls. U2AC: not with the hands-free guard on: that would drop the
++                // guard's link too (the phone then rings in-band on the car until it reconnects); the AA RFCOMM
++                // is closed above and the HSP stub below, the guard's own link stays
++                if !crate::hfp_guard::enabled() || bt_poweroff {
++                    if let Ok(device) = adapter.device(addr) {
++                        let _ = device.disconnect().await;
++                    }
+                 }
+                 //
+                 // --- UNREGISTER HSP ---
+@@ -8186,10 +8198,8 @@ impl Bluetooth {
+                 }
+                 if bt_poweroff {
+                     let _ = adapter.set_powered(false).await;
+-                } else if crate::hfp_guard::enabled() {
+-                    // U2AC: stay on as a silent second hands-free unit (in-band ringing off for the car)
+-                    crate::hfp_guard::spawn(adapter.clone(), addr, need_restart);
+                 }
++                let _ = need_restart; // the guard took its own receiver at the start of the bootstrap
+                 info!("{} 🚀 Bluetooth wrap-up done (in the background)", NAME);
+             });
+         }
+diff --git a/src/hfp_guard.rs b/src/hfp_guard.rs
+index 7cb693f..0ebd606 100644
+--- a/src/hfp_guard.rs
++++ b/src/hfp_guard.rs
+@@ -21,6 +21,7 @@ use bluer::rfcomm::{Profile, ReqError, Stream};
+ use bluer::{Adapter, Address, Uuid};
+ use futures::StreamExt;
+ use simplelog::*;
++use std::sync::atomic::{AtomicBool, Ordering};
+ use std::time::Duration;
+ use tokio::io::{AsyncReadExt, AsyncWriteExt};
+ use tokio::sync::broadcast::Receiver as BroadcastReceiver;
+@@ -40,7 +41,14 @@ pub fn enabled() -> bool {
+ 
+ /// Start the guard for `addr` (the phone that just did the AA bootstrap). It ends when the AA session
+ /// restarts or stops (`restart`), which drops the hands-free link and unregisters the profile.
++static RUNNING: AtomicBool = AtomicBool::new(false);
++
+ pub fn spawn(adapter: Adapter, addr: Address, mut restart: BroadcastReceiver<Option<Action>>) {
++    // one guard at a time: a bootstrap that failed and is retried keeps the guard it already started
++    if RUNNING.swap(true, Ordering::SeqCst) {
++        debug!("{} already running", NAME);
++        return;
++    }
+     tokio::spawn(async move {
+         let adapter2 = adapter.clone();
+         tokio::select! {
+@@ -56,6 +64,7 @@ pub fn spawn(adapter: Adapter, addr: Address, mut restart: BroadcastReceiver<Opt
+         if let Ok(device) = adapter2.device(addr) {
+             let _ = timeout(Duration::from_secs(2), device.disconnect()).await;
+         }
++        RUNNING.store(false, Ordering::SeqCst);
+     });
+ }
+ 
+@@ -67,7 +76,8 @@ enum End {
+ }
+ 
+ async fn run(adapter: Adapter, addr: Address) {
+-    // aa-proxy-rs has just disconnected the phone after the bootstrap: let that settle first
++    // started with the bootstrap (the phone has just opened its AA Wireless RFCOMM): let the Wi-Fi
++    // credentials exchange go first, it takes ~0.1 s
+     sleep(Duration::from_secs(2)).await;
+     let session = match bluer::Session::new().await {
+         Ok(s) => s,
