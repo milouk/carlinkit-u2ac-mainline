@@ -35,7 +35,9 @@ mk /usr/sbin/insmod 'echo "insmod $*" >> /run/stub.calls; n=${1##*/}; n=${n%%.ko
 case $n in sdhci_esdhc_imx) (sleep 1; mkdir -p /sys/class/net/wlan0/phy80211; echo phy0 > /sys/class/net/wlan0/phy80211/name; echo 02:11:22:aa:bb:cc > /sys/class/net/wlan0/address; echo 3 > /sys/class/net/wlan0/ifindex) & ;;
 hci_uart) (sleep 2; mkdir -p /sys/class/bluetooth/hci0) & ;;
 u2ac_ws2812) L=/sys/class/leds/rgb:status; mkdir -p $L; for f in color trigger brightness delay_on delay_off; do : > $L/$f; done ;; esac'
-mk /usr/sbin/iw 'echo "iw $*" >> /run/stub.calls; case "$*" in *channels*) printf "* 5180 MHz [36]\n\t  Maximum TX power: 20.0 dBm\n\t  Channel widths: 20MHz HT40+ VHT80\n";; esac; exit 0'
+mk /usr/sbin/iw 'echo "iw $*" >> /run/stub.calls; case "$*" in *channels*) printf "* 5180 MHz [36]\n\t  Maximum TX power: 20.0 dBm\n\t  Channel widths: 20MHz HT40+ VHT80\n";;
+*"station dump"*) printf "Station 02:aa:bb:cc:dd:01 (on wlan0)\n\tinactive time:\t120 ms\n\trx bytes:\t1000\n\ttx bytes:\t2000\n\ttx retries:\t3\n\ttx failed:\t0\n\tsignal:  \t-45 dBm\n\tsignal avg:\t-46 dBm\n\ttx bitrate:\t300.0 MBit/s VHT-MCS 7\n\trx bitrate:\t270.0 MBit/s\n\tconnected time:\t60 seconds\n";;
+*" info") printf "Interface wlan0\n\tssid AutoKit\n\ttype AP\n\tchannel 36 (5180 MHz), width: 40 MHz, center1: 5190 MHz\n\ttxpower 14.00 dBm\n";; esac; exit 0'
 # btmgmt 5.87 on the unit: with a non-FIFO stdin (/dev/null) it quits before the reply, printing nothing
 mk /usr/sbin/btmgmt '[ -p /dev/stdin ] || { echo "btmgmt $* (stdin not a FIFO: no reply)" >> /run/stub.calls; exit 0; }
 echo "btmgmt $*" >> /run/stub.calls; case "$*" in *info*) echo "hci0: Primary controller"; echo "	current settings: bondable ssp br/edr le";; esac'
@@ -119,5 +121,9 @@ sleep 2
 nh2=$(cnt '^hostapd -B')
 echo "--- watch: hostapd=$((nh1 - nh0)) bluetoothd=$((nb1 - nb0)) aa=$((na1 - na0)) recreate=$((nh2 - nh1)) ix=$(cat /run/u2ac-watch/wlan0.ix)"
 grep 'watch:' /run/log/u2ac-aa.log
+# health exporter: valid Prometheus text, each family in one block, no MAC address anywhere
+u2ac-metrics > /tmp/metrics.txt 2> /tmp/metrics.err
+sh /o/metricscheck.sh /tmp/metrics.txt
+grep -E '^u2ac_(boot_phase_seconds\{phase="bt"\}|process_up\{name="bluetoothd"\}|wifi_station_signal_dbm|wifi_channel |radio_repairs_total\{what="hostapd"\}|aa_proxy_rss_bytes)' /tmp/metrics.txt | sed 's/^/metric: /'
 echo "--- status:"; u2ac-aa status
 echo "--- persisted:"; ls -la /run/persist

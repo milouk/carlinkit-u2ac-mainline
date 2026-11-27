@@ -107,6 +107,8 @@ L="option voice refused (needs MITM)"; EXP='"code":"input"'; chk -X POST --data-
 L="option unknown key refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=u2ac-dev&value=on" "$A"
 L="option bad value refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=opt&key=usbchunk&value=999" "$A"
 L="logs flight"; EXP='"src":"flight"'; chk "$U/cgi-bin/logs?n=20&src=flight"
+L="metrics (no token)"; EXP='u2ac_up 1'; chk "$U/cgi-bin/metrics"
+curl -s -D - -o /dev/null "$U/cgi-bin/metrics" | grep -qi '^content-type: text/plain; version=0.0.4' && ok "web: metrics content type" || bad "web: metrics content type"
 docker exec u2ac-selftest-web sh -c '[ ! -e /tmp/pwn ] && grep -q "^SSID=x;\$(touch /tmp/pwn)$" /run/persist/u2ac-wifi.conf' \
   && ok "web: injected text stored literally, never run" || bad "web: injection check"
 # with the hotspot password changed (the wifi test above), a new code goes to its first visitor again
@@ -155,6 +157,16 @@ for sc in car carncm computer dev; do
      && echo "$out" | grep -q -- '--- known_devices: 11:22:33:44:55:66 ' \
      && echo "$out" | grep -q -- '--- flightlog guard: flight log: no area'; then ok "start dry run: $sc"
   else bad "start dry run: $sc"; echo "$out" | sed -n '/--- u2ac-aa.log/,/--- stub/p'; echo "$out" | grep -- '^--- \(flightlog\|squashfs\|led\|known\)'; fi
+  # health exporter (u2ac-metrics): valid text, no MAC, the boot phases / daemons / station / repairs present
+  echo "$out" | grep -q -- '--- metrics: [1-9][0-9]* samples, 0 bad, 0 dup, 0 outside' \
+    && echo "$out" | grep -q -- '--- metrics macs: 0' \
+    && echo "$out" | grep -q '^metric: u2ac_boot_phase_seconds{phase="bt"} [0-9]' \
+    && echo "$out" | grep -q '^metric: u2ac_process_up{name="bluetoothd"} 1' \
+    && echo "$out" | grep -q '^metric: u2ac_wifi_station_signal_dbm{station="1",role="other"} -45' \
+    && echo "$out" | grep -q '^metric: u2ac_wifi_channel 36' \
+    && echo "$out" | grep -q '^metric: u2ac_radio_repairs_total{what="hostapd"} 2' \
+    && { [ $carish = 0 ] || echo "$out" | grep -q '^metric: u2ac_aa_proxy_rss_bytes [0-9]'; } \
+    && ok "health exporter: $sc" || { bad "health exporter: $sc"; echo "$out" | grep -- '--- metrics\|^metric:\|^BAD\|^DUP\|^OUTSIDE'; }
   # radio watch: hostapd + bluetoothd killed, then wlan0 re-created: each repaired once, aa-proxy-rs restarted
   wa=0; [ $carish = 1 ] && wa=1
   echo "$out" | grep -q -- "--- watch: hostapd=1 bluetoothd=1 aa=$wa recreate=1 ix=7" \
