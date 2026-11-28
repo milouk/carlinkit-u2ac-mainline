@@ -155,6 +155,15 @@ dry run (car / computer / dev). Must end `selftest: 0 failure(s)`.
   disconnect ~2.4 s) before it starts USB. Fixes (rootfs 4b1bf7ae): D-Bus at once + the BT stack read first,
   aa-build patch 0005 (wrap-up in the background), "BT: address set" stamp, hostapd -t timestamps.
 - Not ours: the phone's hotspot join (two associations per start in both logs) and SYNC's projection start.
+- 2026-11-28 two drives on rootfs f931b806 (early relay, zstd relay, NOR boost, guard 0006): radios 7.1 and
+  7.5 s, BT up 9.6 and 9.8, relay first line 11.2 and 11.5, phone on Bluetooth 11.5 and 11.8 (was 14.0), phone
+  on the hotspot 17.2 and 23.4, Android Auto data 23.3 and 25.3 (was 27.2 to 30.1). In the faster drive the car
+  was the last step: the accessory gadget was on the port at 18.8 s and SYNC enabled it at 23.3. In the slower
+  one the phone joined the hotspot, left it 2.4 s later and joined again (9.7 s from the credentials to its
+  connect report, 3.3 s in the other drive). The phone also reset the hands-free guard link then, and the guard
+  was back 5 s later (27.4 s). No radio repairs, kernel log clean.
+- Left on our side: the relay is launched at 7.4 s but waits for its unpack (nice 10, next to the radio
+  bring-up), which ends at about 10.7 s, so the first Bluetooth try comes ~1.7 s after BT is up.
 
 ## Boot I/O: zstd-packed relay, slow NOR (measured 2026-11-28)
 - NOR reads at 2.8 MB/s (`dd /dev/mtd3`, 6 MB in 2.14 s: single SPI at 29 MHz, CPU copies). xz decoding of the
