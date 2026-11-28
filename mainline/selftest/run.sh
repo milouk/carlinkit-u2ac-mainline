@@ -8,6 +8,7 @@
 #  4 u2ac-aa start dry run (stubbed hardware) in the car / car-after-NCM / computer-on-USB / dev-forced cases
 #  5 the boot's USB probe hook (rcS board_usb_probe) with a stand-in probe: car, computer, no host, late host,
 #    probe failure, dev mode (the real u2ac-usbprobe needs FunctionFS: tested on the dongle in RAM)
+#  6 the home upload (u2ac-home) on its own: queue, upload, marks, absent network, join timeout, server error
 set -u
 IMG=${1:?usage: run.sh rootfs.img [init]}
 D=$(cd "$(dirname "$0")" && pwd)
@@ -109,6 +110,25 @@ L="option bad value refused"; EXP='"code":"input"'; chk -X POST --data-binary "t
 L="logs flight"; EXP='"src":"flight"'; chk "$U/cgi-bin/logs?n=20&src=flight"
 L="metrics (no token)"; EXP='u2ac_up 1'; chk "$U/cgi-bin/metrics"
 curl -s -D - -o /dev/null "$U/cgi-bin/metrics" | grep -qi '^content-type: text/plain; version=0.0.4' && ok "web: metrics content type" || bad "web: metrics content type"
+# home upload: the WPA2 key derived (PBKDF2 of the password, checked against Python's), never the password;
+# an IPv4 address only; a new name needs the password again; the same name keeps the key; off removes it all
+L="home set"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&action=home&ssid=Home+Net&psk=homesecret9&url=192.168.1.10%3A9091" "$A"
+docker exec u2ac-selftest-web sh -c 'grep -qx "SSID=Home Net" /run/persist/u2ac-home.conf && grep -qx "URL=http://192.168.1.10:9091" /run/persist/u2ac-home.conf && grep -qx "PMK=f12814451f2eba789e8e47aba920e05f5772c5f1a57c2f1f39513ae49db9cf35" /run/persist/u2ac-home.conf && ! grep -rq homesecret9 /run' \
+  && ok "web: home upload keeps the derived key, never the password" || bad "web: home upload settings file"
+L="settings home"; EXP='"home":{"set":true,"ssid":"Home Net","url":"http://192.168.1.10:9091","last":""}'; chk "$U/cgi-bin/settings"
+L="home host name refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=home&ssid=Home+Net&url=pushgw.lan%3A9091" "$A"
+L="home bad octet refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=home&ssid=Home+Net&url=192.168.1.300" "$A"
+L="home bad port refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=home&ssid=Home+Net&url=192.168.1.10%3A99999" "$A"
+L="home path trick refused"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=home&ssid=Home+Net&url=192.168.1.10%2F..%2Fx" "$A"
+L="home new name needs the password"; EXP='enter the home Wi-Fi password'; chk -X POST --data-binary "token=$T&confirm=yes&action=home&ssid=Other+Net&url=192.168.1.10" "$A"
+L="home same name keeps the key"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&action=home&ssid=Home+Net&url=192.168.1.11%2Fpg" "$A"
+docker exec u2ac-selftest-web sh -c 'grep -qx "URL=http://192.168.1.11:9091/pg" /run/persist/u2ac-home.conf && grep -qx "PMK=f12814451f2eba789e8e47aba920e05f5772c5f1a57c2f1f39513ae49db9cf35" /run/persist/u2ac-home.conf' \
+  && ok "web: home address changed, key kept" || bad "web: home address change"
+L="home upload now"; EXP='"ok":true'; chk -X POST --data-binary "token=$T&confirm=yes&action=home-now" "$A"
+docker exec u2ac-selftest-web sh -c 'grep -q "u2ac-aa home-now" /run/stub.calls' && ok "web: upload now runs u2ac-aa home-now" || bad "web: upload now"
+L="home off"; EXP='Home upload off'; chk -X POST --data-binary "token=$T&confirm=yes&action=home-off" "$A"
+docker exec u2ac-selftest-web test ! -e /run/persist/u2ac-home.conf && ok "web: home off removes the settings" || bad "web: home off"
+L="home upload now refused when off"; EXP='"code":"input"'; chk -X POST --data-binary "token=$T&confirm=yes&action=home-now" "$A"
 docker exec u2ac-selftest-web sh -c '[ ! -e /tmp/pwn ] && grep -q "^SSID=x;\$(touch /tmp/pwn)$" /run/persist/u2ac-wifi.conf' \
   && ok "web: injected text stored literally, never run" || bad "web: injection check"
 # with the hotspot password changed (the wifi test above), a new code goes to its first visitor again
@@ -196,6 +216,17 @@ for sc in car carncm computer dev; do
     && ok "radio watch: $sc" || { bad "radio watch: $sc"; echo "$out" | grep -- '--- watch\|watch:\|radio repairs'; }
 done
 
+# 4b the home upload at boot: a car start near home with one flight-log slot not sent yet. Sent before the
+# hotspot starts (the relay still starts early), the slot this boot writes carries the mark
+out=$(run_arm --privileged -v "$W:/o:ro" -e SCEN=carhome "$TAG" /bin/sh /o/dry.sh 2>&1)
+echo "$out" | grep -q -- '--- home log: sent 1 log(s) up to seq 7 to 127.0.0.1:19091' \
+  && echo "$out" | grep -q -- '--- home order: before-ap wpa-then-hostapd' \
+  && echo "$out" | grep -q -- '--- home server: POST /metrics/job/u2ac/log_seq/7 [0-9]*;$' \
+  && echo "$out" | grep -q -- '--- home mark: seq=8 .* home=7$' \
+  && echo "$out" | grep -q 'aa-proxy-rs started early' && echo "$out" | grep -q 'AP up' && ! echo "$out" | grep -q 'did not' \
+  && ok "home upload at boot: before the hotspot, its mark in the next slot" \
+  || { bad "home upload at boot"; echo "$out" | grep -- '--- home\|home upload\|AP up\|did not'; }
+
 # 5 the boot's USB probe hook (board_usb_probe) with a stand-in probe: return code (1 = no NCM from rcS), the
 # verdict, how long rcS waits, the late-host path, the probe's MTP-stage identity
 for ps in car computer nohost late fail dev; do
@@ -211,6 +242,11 @@ for ps in car computer nohost late fail dev; do
   esac
   echo "$out" | grep -q "$re" && ok "usb probe hook: $ps" || bad "usb probe hook: $ps: $out"
 done
+
+# 6 the home upload on its own (stubbed radio tools, an nc Pushgateway stand-in)
+out=$(run_arm -v "$W:/o:ro" "$TAG" /bin/sh /o/hometest.sh 2>&1)
+r=$(echo "$out" | grep -o 'home: pass=[0-9]* fail=[0-9]*')
+case $r in *" fail=0") ok "home upload: $r" ;; *) bad "home upload: $out" ;; esac
 rm -rf "$W"
 echo "selftest: $FAIL failure(s)"
 exit $FAIL

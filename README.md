@@ -55,6 +55,10 @@ modified. The new kernel goes in through the vendor's own kernel-staging path.
 - **Health metrics**: `http://10.0.0.1/cgi-bin/metrics` in Prometheus text format (start-up timings, the phone's
   Wi-Fi join time, the car's accept time, temperature, CPU, Wi-Fi signal, daemons, repairs). No MAC addresses,
   names or passwords in it. A copy goes into every flight-recorder slot.
+- **Home upload** (optional): when a drive starts near home, the dongle joins your home Wi-Fi for a moment,
+  before its hotspot starts, and sends the health numbers of its last drives to a Prometheus Pushgateway. It
+  never takes more than 4 seconds and keeps only a key derived from the Wi-Fi password. A Grafana dashboard is
+  in [mainline/tools/grafana](mainline/tools/grafana).
 - **Web UI** on the hotspot (`http://10.0.0.1`) and over USB (`http://192.168.50.2`): status, logs (the flight
   recorder too), Wi-Fi name and password, channel width (40 or 80 MHz), paired phones, startup mode, and
   switches for the hands-free guard, flight recorder, status light, car-off sleep, USB transfer size and the

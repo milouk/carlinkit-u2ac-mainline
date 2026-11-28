@@ -1,6 +1,7 @@
 #!/bin/sh
 # dry run of the image's u2ac-aa start: real script, stubbed hardware (insmod, iw, btmgmt, hostapd, ...),
-# fake /sys on tmpfs. Needs a --privileged armv7 container of the rootfs. SCEN=car|carncm|computer|dev
+# fake /sys on tmpfs. Needs a --privileged armv7 container of the rootfs. SCEN=car|carncm|computer|dev|carhome
+# (carhome: a car start near home with the home upload set up and one flight-log slot not sent yet)
 set -u
 SCEN=${SCEN:-car}
 # tests the u2ac-aa / radio-lib.sh baked into the image (no copies from the repo)
@@ -21,7 +22,7 @@ mkdir -p /sys/devices/system/cpu/cpu0/cpuidle/state2; echo 1 > /sys/devices/syst
 echo 0 > /sys/class/net/usb0/carrier; [ "$SCEN" = computer ] && echo 1 > /sys/class/net/usb0/carrier
 # the boot's USB probe verdict (rcS board_usb_probe, tested by probe.sh): car = AOA seen, NCM never up;
 # carncm = no AOA within the window (a car waiting for the driver) so NCM came up: u2ac-aa must take it off
-case $SCEN in car) v=car ;; computer | carncm) v=noaoa ;; dev) v=dev ;; esac
+case $SCEN in car | carhome) v=car ;; computer | carncm) v=noaoa ;; dev) v=dev ;; esac
 echo "$v" > /run/u2ac-usbprobe
 echo "u2ac-usbprobe: test verdict $v" > /run/log/u2ac-usbprobe.log
 if [ "$v" != car ]; then
@@ -38,7 +39,8 @@ u2ac_ws2812) L=/sys/class/leds/rgb:status; mkdir -p $L; for f in color trigger b
 mk /usr/sbin/rmmod 'echo "rmmod $*" >> /run/stub.calls; grep -v "^$1 " /fake/modules > /fake/modules.n; mv /fake/modules.n /fake/modules'
 mk /usr/sbin/iw 'echo "iw $*" >> /run/stub.calls; case "$*" in *channels*) printf "* 5180 MHz [36]\n\t  Maximum TX power: 20.0 dBm\n\t  Channel widths: 20MHz HT40+ VHT80\n";;
 *"station dump"*) printf "Station 02:aa:bb:cc:dd:01 (on wlan0)\n\tinactive time:\t120 ms\n\trx bytes:\t1000\n\ttx bytes:\t2000\n\ttx retries:\t3\n\ttx failed:\t0\n\tsignal:  \t-45 dBm\n\tsignal avg:\t-46 dBm\n\ttx bitrate:\t300.0 MBit/s VHT-MCS 7\n\trx bitrate:\t270.0 MBit/s\n\tconnected time:\t60 seconds\n";;
-*" info") printf "Interface wlan0\n\tssid AutoKit\n\ttype AP\n\tchannel 36 (5180 MHz), width: 40 MHz, center1: 5190 MHz\n\ttxpower 14.00 dBm\n";; esac; exit 0'
+*" info") printf "Interface wlan0\n\tssid AutoKit\n\ttype AP\n\tchannel 36 (5180 MHz), width: 40 MHz, center1: 5190 MHz\n\ttxpower 14.00 dBm\n";;
+*scan*) [ -e /run/home-here ] && printf "BSS 0a:0b:0c:0d:0e:02(on wlan0)\n\tfreq: 2437.0\n\tsignal: -60.00 dBm\n\tSSID: Home Net\n";; esac; exit 0'
 # btmgmt 5.87 on the unit: with a non-FIFO stdin (/dev/null) it quits before the reply, printing nothing
 mk /usr/sbin/btmgmt '[ -p /dev/stdin ] || { echo "btmgmt $* (stdin not a FIFO: no reply)" >> /run/stub.calls; exit 0; }
 echo "btmgmt $*" >> /run/stub.calls; case "$*" in *info*) echo "hci0: Primary controller"; echo "	current settings: bondable ssp br/edr le";; esac'
@@ -54,6 +56,11 @@ rm -f /usr/sbin/arping; mk /usr/sbin/arping 'echo "arping $*" >> /run/stub.calls
 [ "$SCEN" = computer ] && : > /run/computer
 : > /run/udhcpd-ncm.pid
 mk /usr/libexec/bluetooth/bluetoothd 'echo "bluetoothd $*" >> /run/stub.calls; sleep 1; echo "bluetoothd[9]: Bluetooth daemon 5.79"; echo "bluetoothd[9]: Bluetooth management interface 1.22 initialized"; sleep 600'
+# the home upload's client side (u2ac-home): joined 0.3 s after wpa_supplicant starts, a DHCP lease at once
+mk /usr/sbin/wpa_supplicant 'echo "wpa_supplicant $*" >> /run/stub.calls; (sleep 0.3; echo up > /sys/class/net/wlan0/operstate) &
+exec sleep 600'
+mk /sbin/udhcpc 'echo "udhcpc $*" >> /run/stub.calls; while [ $# -gt 0 ]; do case $1 in -s) S=$2; shift;; esac; shift; done
+interface=wlan0 ip=192.168.77.20 mask=24 router=192.168.77.1 "$S" bound'
 mk /usr/bin/aa-proxy-rs 'echo "aa-proxy-rs AA_FFS_CHUNK=$AA_FFS_CHUNK AA_HFP_GUARD=${AA_HFP_GUARD:-unset} cwd=$(pwd)" >> /run/stub.calls; sleep 600'
 mkdir -p /run/aa-etc /run/data
 # flight recorder: a fake 'rootfs' MTD (plain file, mtd.sh's MTD_SYS/MTD_DEV) = squashfs header with
@@ -67,6 +74,22 @@ printf '\000\220\235\000\000\000\000\000' | dd of=$MTD_DEV/mtd3 bs=1 seek=40 con
 printf '#!/bin/sh\ntr "\\000" "\\377" < /dev/zero | head -c $(($3 * 65536)) | dd of="$1" bs=65536 seek=$(($2 / 65536)) conv=notrunc 2> /dev/null\n' > /fake/erase
 chmod +x /fake/erase
 SQ0=$(head -c 11927552 $MTD_DEV/mtd3 | md5sum | cut -d' ' -f1)
+if [ "$SCEN" = carhome ]; then
+    # set up, the home network in range, a Pushgateway stand-in (nc: busybox httpd has no DELETE) on 127.0.0.1,
+    # and slot seq 7 (a drive with metrics) in the flight log, as fl_write lays it out
+    printf 'SSID=Home Net\nPMK=%s\nURL=http://127.0.0.1:19091/pg\n' 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+        > /run/persist/u2ac-home.conf
+    : > /run/home-here; : > /run/pgw.log
+    mk /fake/pgw.sh 'read -r m p v; n=0; cr=$(printf "\r")
+while read -r l; do l=${l%"$cr"}; [ -z "$l" ] && break; case $l in [Cc]ontent-[Ll]ength:*) n=${l#*: };; esac; done
+[ "$n" -gt 0 ] && head -c "$n" > /dev/null; echo "$m ${p#/pg} $n" >> /run/pgw.log; printf "HTTP/1.0 200 OK\r\n\r\n"'
+    nc -lk -s 127.0.0.1 -p 19091 -e /fake/pgw.sh &
+    { echo "=== metrics"; printf '# HELP u2ac_up up\n# TYPE u2ac_up gauge\nu2ac_up 1\n# TYPE u2ac_aa_event_seconds gauge\nu2ac_aa_event_seconds{event="proxying"} 23.3\n'
+      echo "=== usb:configured"; } | gzip -c > /tmp/g
+    l="U2AC-FLIGHTLOG 1 seq=7 up=86 why=session+60s bytes=$(wc -c < /tmp/g)"
+    { echo "$l"; head -c $((512 - ${#l} - 1)) /dev/zero; cat /tmp/g; } \
+        | dd of=$MTD_DEV/mtd3 bs=512 seek=$(((11927552 + 7 * 131072) / 512)) conv=notrunc 2> /dev/null
+fi
 # a save BEFORE state_restore (the radios failed at boot, then `u2ac-aa persist` / `dev on` by hand) must keep
 # the archived pairing, not mirror the (absent) live dirs over it
 u2ac-aa persist > /dev/null 2>&1
@@ -104,6 +127,14 @@ echo "--- known_devices: $(tr '\n' ' ' < /run/aa-etc/known_devices 2> /dev/null)
 case $SCEN in car | carncm) n=0; until [ -n "$(u2ac-aa flightlog 2> /dev/null | head -n 1)" ] || [ $n -ge 30 ]; do sleep 0.5; n=$((n + 1)); done ;; esac
 echo "--- flightlog list: $(u2ac-aa flightlog 2>&1 | head -n 1)"
 echo "--- flightlog last: $(u2ac-aa flightlog last 2>&1 | grep -c '^=== ')"
+if [ "$SCEN" = carhome ]; then
+    # sent at boot before the hotspot came up; the slot this boot writes (seq 8, 90 s in) carries the mark home=7
+    n=0; until u2ac-aa flightlog 2> /dev/null | grep -q ' seq=8 ' || [ $n -ge 30 ]; do sleep 0.5; n=$((n + 1)); done
+    echo "--- home log: $(grep 'home upload:' /run/log/u2ac-aa.log | head -n 1 | sed 's/.*home upload: //')"
+    echo "--- home order: $(awk '/home upload: sent/ { h = NR } /AP up/ { a = NR } END { print (h && a && h < a) ? "before-ap" : "WRONG" }' /run/log/u2ac-aa.log) $(awk '/^wpa_supplicant/ && !w { w = NR } /^hostapd -B/ && !hb { hb = NR } END { print (w && hb && w < hb) ? "wpa-then-hostapd" : "WRONG" }' /run/stub.calls)"
+    echo "--- home server: $(tr '\n' ';' < /run/pgw.log)"
+    echo "--- home mark: $(u2ac-aa flightlog 2> /dev/null | grep -o 'seq=8 .*')"
+fi
 [ "$(head -c 11927552 $MTD_DEV/mtd3 | md5sum | cut -d' ' -f1)" = "$SQ0" ] && echo "--- squashfs region intact" \
     || echo "--- squashfs region CHANGED"
 # the guard: a squashfs that reaches into the area -> no flight log at all

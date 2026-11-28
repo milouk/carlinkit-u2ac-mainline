@@ -179,6 +179,36 @@ dry run (car / computer / dev). Must end `selftest: 0 failure(s)`.
 - Not done: Thumb-2 build (-20% binary, only 0.25 s less xz, worse BCJ), CPU overclock (900 MHz = the top fused
   grade, beyond is out of spec), NOR quad mode (board wiring of IO2/IO3 unproven).
 
+## Home upload (u2ac-home, web Settings "Home upload", file /run/persist/u2ac-home.conf)
+- What: the `=== metrics` part of each flight-log slot (u2ac-metrics text taken during the drive) goes to a
+  Prometheus Pushgateway on the home network, one group per slot (`job="u2ac"`, `log_seq="<seq>"`, HELP
+  lines dropped, `u2ac_flightlog_seq`, `u2ac_flightlog_info{why}` and `u2ac_flightlog_written_seconds` added).
+  Uploading seq N deletes seq N-30 from the gateway (Prometheus keeps the history). Grafana dashboard:
+  `mainline/tools/grafana/u2ac-drives.json` (datasource variable `ds`).
+- When: the car cuts USB power at switch-off, so at the START of the next drive. `u2ac-home prep` reads the
+  unsent slots while the radios load, and u2ac-aa's home_window runs `u2ac-home push 4` after the radio
+  bring-up and before ap_up: one directed scan on the channel it was found on last time (0.07 s on the unit),
+  else 2412/2437/2462/5180-5240, then wpa_supplicant (stored PMK, that BSS and channel only), udhcpc, a POST
+  per slot, wpa_supplicant stopped, address removed, wlan0 down. Boxed to 4 s (`U2AC_HOME_S`), enforced by
+  u2ac-aa too. The phone gets the hotspot's details ~6 s after the radios are up, so the hotspot is ready
+  before it is needed. Away from home it costs ~0.1 to 0.4 s before the hotspot, nothing the phone sees.
+- By hand: `u2ac-aa home-now [all]` (web "Upload now"): stops the hotspot, uploads (20 s box, a full scan
+  if needed), brings the hotspot back. `all` sends every slot again.
+- Marks: the last seq sent goes to /run/persist/u2ac-home.sent (flash only outside a session, so not in a
+  car) and into the next slot's header as `home=SEQ` (fl_write), which a drive does write. prep takes the
+  newer of the two. Re-sending a slot is harmless (same group, same values).
+- Address: DHCP asking for the last lease (u2ac-home.lease). OpenWrt's dnsmasq pings an address ~3 s before it
+  offers it to a client without a lease, so in the 4 s box the last lease is used as it was once DHCP has had
+  1 s. Measured 2026-11-28 at the desk (OpenWrt 2.4 GHz ch 6 at -72 dBm, from hotspot mode, 4 slots): 6 of 6
+  sent, 2.5 to 4.6 s, join ~0.5 s (one association reject + retry adds ~1 s), DHCP 0.08 s for a known client.
+  The mark is written before leaving the network, and u2ac-aa gives that 2 s past the box.
+- Only WPA2-PSK (no SAE in this wpa_supplicant: WPA3-only networks fail, transition mode works). The web UI
+  keeps only the PMK (wpa_passphrase), never the password. The server is an IPv4 address (no DNS). The
+  outcome is in `u2ac-aa status`, the flight log and the metrics (`u2ac_home_upload_*`).
+- Tests: selftest/hometest.sh (queue, upload order, prune, marks, absent network, join timeout, server
+  error, against an nc Pushgateway stand-in) and dry.sh SCEN=carhome (at boot: before the hotspot, mark in
+  the next slot).
+
 ## Car-off sleep (u2ac-aa car_sleep; web Options "Sleep when the car is off", flag u2ac-sleep-off)
 - After a live AA session, once the car has not used the USB port (UDC not "configured") for 90 s
   (`U2AC_SLEEP_S`) and no session runs: aa-proxy-rs stopped (no more Bluetooth calls pulling the phone onto

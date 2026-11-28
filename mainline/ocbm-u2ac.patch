@@ -203171,13 +203171,13 @@ index 0000000..8114b82
 \ No newline at end of file
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
 new file mode 100755
-index 0000000..c787102
+index 0000000..e6fcfec
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
-@@ -0,0 +1,891 @@
+@@ -0,0 +1,937 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
-+# u2ac-aa start|stop|status|persist|aa-now|watch|dev on|off|aa|flightlog [last|SEQ]  (Carlinkit U2AC, milouk 2026-11-26)
++# u2ac-aa start|stop|status|persist|aa-now|watch|home-now [all]|dev on|off|aa|flightlog [last|SEQ]  (Carlinkit U2AC, milouk 2026-11-26)
 +# Wireless Android Auto on mainline: BCM4358 Wi-Fi (brcmfmac) + BT (hci_bcm), a 5 GHz AP, DHCP, D-Bus,
 +# BlueZ and aa-proxy-rs (aa-proxy/aa-proxy-rs v1.3.0, FunctionFS AOA gadget toward the car).
 +#  - Calls / microphone: aa-proxy-rs only bootstraps over Bluetooth (AA Wireless RFCOMM + a log-only HSP
@@ -203415,6 +203415,25 @@ index 0000000..c787102
 +    fi
 +    dropbear -E -s -r "$K" -p 10.0.0.1:22 -P /run/dropbear-wlan.pid 2>> /run/log/dropbear.log
 +    return $rc
++}
++
++# home_window: the home upload (u2ac-home) while wlan0 is still free, before ap_up takes it. Only when it is set up
++# and prep found slots to send; at most U2AC_HOME_S (4) s, enforced here too. The phone gets the hotspot's
++# details over Bluetooth ~6 s after the radios are up (car runs 2026-11-28), so the box ends before it needs it.
++home_window() {
++    [ -s "$P/u2ac-home.conf" ] || return 0
++    n=0; until [ -e /run/u2ac-home/ready ] || [ $n -ge 20 ]; do sleep 0.05; n=$((n + 1)); done
++    ls /run/u2ac-home/q/*.prom > /dev/null 2>&1 || return 0
++    HS=${U2AC_HOME_S:-4}
++    u2ac-home push "$HS" > /dev/null 2>&1 &
++    hp=$!; n=0
++    # its own box ends the network part at HS s; 2 s more for leaving the network (wpa_supplicant's exit)
++    while kill -0 $hp 2> /dev/null && [ $n -lt $((HS * 20 + 40)) ]; do sleep 0.05; n=$((n + 1)); done
++    if kill -0 $hp 2> /dev/null; then
++        kill $hp 2> /dev/null; wait $hp 2> /dev/null; u2ac-home cleanup
++        say "home upload: stopped at its ${HS} s limit"
++    fi
++    return 0
 +}
 +
 +# (the "BT: ..." stamps time the steps of the start-up's slowest part in the flight log)
@@ -203831,6 +203850,8 @@ index 0000000..c787102
 +        _b=$((_b / 2))
 +    done
 +    _l="U2AC-FLIGHTLOG 1 seq=$FL_SEQ up=$(cut -d. -f1 /proc/uptime) why=$1 bytes=$(wc -c < /run/fl.gz)"
++    # home=SEQ: the last slot this boot's home upload sent (u2ac-home): the mark reaches flash here, in a drive
++    _hs=$(cat /run/u2ac-home/sent 2> /dev/null); case $_hs in '' | *[!0-9]*) ;; *) _l="$_l home=$_hs" ;; esac
 +    { echo "$_l"; head -c $((FL_HDR - ${#_l} - 1)) /dev/zero; cat /run/fl.gz; } > /run/fl.slot
 +    rm -f /run/fl.gz
 +    # never outside [area, end of the MTD): the squashfs lies below FL_OFF (fl_dev checked its bytes_used)
@@ -203896,6 +203917,9 @@ index 0000000..c787102
 +    # 0.86 s of zstd) instead of ~4.5 s via the xz squashfs. Low priority: at full priority it held the radio
 +    # bring-up back by that much (radios up 7.7 s -> 11.0 s, the flash 2026-11-28); aa_run waits for it
 +    ( read -r me _ < /proc/self/stat; renice -n 10 -p "$me" > /dev/null 2>&1; zbin_unpack ) &
++    # home upload (u2ac-home): the flight-log slots it has not sent yet are read out now, while the radios load;
++    # home_window below sends them before the hotspot starts
++    [ -s "$P/u2ac-home.conf" ] && ( read -r me _ < /proc/self/stat; renice -n 10 -p "$me" > /dev/null 2>&1; u2ac-home prep ) &
 +    # car or computer on USB: decided in parallel with the radios (its window no longer adds to the boot)
 +    rm -f /run/u2ac-usbhost
 +    # A car with NCM on the port (the probe could not tell: no AOA within 3 s) gets the port emptied at once,
@@ -203934,6 +203958,7 @@ index 0000000..c787102
 +    # BT bring-up (D-Bus, bluetoothd) in parallel with the AP
 +    bt_up &
 +    btp=$!
++    home_window
 +    fault=0
 +    if ap_up; then say "AP up"; else say "AP did not come up (/run/log/hostapd.log)"; fault=1; fi
 +    if wait $btp; then say "BT up"; else say "D-Bus/BlueZ did not start (/run/log/bluetoothd.log)"; fault=1; fi
@@ -204053,6 +204078,27 @@ index 0000000..c787102
 +        echo "radio repairs this boot:${_r:- none}$([ -e "$WI/off" ] && echo ' (watch off)')"
 +        if [ -e /run/u2ac-sleeping ]; then echo "car-off sleep: SLEEPING (radios off, USB port waits for a host)"
 +        else echo "car-off sleep: $([ -e "$P/u2ac-sleep-off" ] && echo off || echo "on (after ${SLEEP_S} s without the car)")"; fi
++        u2ac-home status 2> /dev/null
++        ;;
++    home-now)
++        # the home upload by hand (web "Upload now"): the hotspot stops for the few seconds wlan0 is a client.
++        # `all`: every slot in the flight log again, not only the ones newer than the last upload
++        [ -s "$P/u2ac-home.conf" ] || { echo "the home upload is not set up (web Settings, Home upload)"; exit 1; }
++        in_session && { echo "not during an Android Auto session"; exit 1; }
++        [ -e /run/u2ac-sleeping ] && { echo "not while the dongle sleeps"; exit 1; }
++        if [ "${2:-}" = all ]; then U2AC_HOME_ALL=1 u2ac-home prep; else u2ac-home prep; fi
++        if ! ls /run/u2ac-home/q/*.prom > /dev/null 2>&1; then echo "nothing new to send"; exit 0; fi
++        # radio_watch would bring the hotspot back in the middle of it
++        mkdir -p "$WI"; wo=0; [ -e "$WI/off" ] || { : > "$WI/off"; wo=1; }
++        for f in /run/hostapd.pid /run/udhcpd-wlan.pid; do [ -s "$f" ] && kill "$(cat "$f")" 2> /dev/null; rm -f "$f"; done
++        sleep 0.5
++        u2ac-home push 20 > /dev/null 2>&1; hrc=$?   # (not rc: ap_radio sets that)
++        ap_radio > /dev/null 2>&1; say "home upload: hotspot back"
++        [ $wo = 1 ] && rm -f "$WI/off"
++        # the learned channel and the mark to flash (outside a session, as always)
++        state_save > /dev/null 2>&1
++        r=$(cut -d' ' -f4- /run/u2ac-home/result 2> /dev/null); echo "${r:-no result}"
++        exit $hrc
 +        ;;
 +    sleep-now) mkdir -p "$WI"; car_sleep "by hand (u2ac-aa sleep-now)"; echo "sleeping: radios off, the USB port waits for a host" ;;
 +    watch) mkdir -p "$WI"; [ -s "$WI/wlan.host" ] || watch_init; radio_watch && echo "radios ok" || { echo "a radio is down (see $LOG)"; exit 1; } ;;
@@ -204064,14 +204110,256 @@ index 0000000..c787102
 +            *) echo "usage: u2ac-aa dev on|off|aa" >&2; exit 2 ;;
 +        esac
 +        ;;
-+    *) echo "usage: u2ac-aa start|stop|status|persist|aa-now|watch|sleep-now|dev on|off|aa|flightlog [last|SEQ]" >&2; exit 2 ;;
++    *) echo "usage: u2ac-aa start|stop|status|persist|aa-now|watch|sleep-now|home-now [all]|dev on|off|aa|flightlog [last|SEQ]" >&2; exit 2 ;;
++esac
+diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-home b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-home
+new file mode 100755
+index 0000000..3e6eb12
+--- /dev/null
++++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-home
+@@ -0,0 +1,236 @@
++#!/bin/sh
++# SPDX-License-Identifier: GPL-3.0-or-later
++# u2ac-home prep|push [SECONDS]|cleanup|status   (Carlinkit U2AC, milouk 2026-11-28)
++# Home upload: the health numbers of each car run (the "=== metrics" part of a flight-log slot: u2ac-metrics
++# text taken during the run) go to a Prometheus Pushgateway on the home network, one group per slot:
++# job="u2ac", log_seq="<seq>". In the car the dongle has no network but its own hotspot, and the car cuts its
++# power at switch-off, so the upload runs at the START of a drive from home: u2ac-aa start calls `push` after
++# the radio bring-up and before the hotspot takes wlan0 (the phone joins it only seconds later), boxed to
++# U2AC_HOME_S (4) s, and only when the flight log holds slots newer than the last upload.
++#   prep     the slots newer than the last upload, as request bodies in /run/u2ac-home/q/SEQ.prom (no network)
++#   push     one directed scan (the network absent = done in ~0.1 s), join it as a client, DHCP, POST each body,
++#            leave. SECONDS = the time box (20 by hand). Leaves wlan0 down: the caller starts the hotspot after
++#            (by hand: `u2ac-aa home-now`, which stops and restarts the hotspot around it)
++#   cleanup  the client side off wlan0 (wpa_supplicant, udhcpc, the DHCP address)
++# Learned too: u2ac-home.lease (the last DHCP address and router, asked for again and used as it was when DHCP
++# cannot answer within a boot's box).
++# Settings: /run/persist/u2ac-home.conf, literal KEY=value lines written by the web UI, never sourced:
++#   SSID=<home Wi-Fi name>   PMK=<64 hex: the WPA2 key wpa_passphrase derives from name + password; the
++#   password itself is not kept>   URL=http://<IPv4>:<port>[/prefix]   (no DNS on the dongle)
++# Learned: u2ac-home.freq (where the network was found: the next scan looks there first) and u2ac-home.sent (the
++# last seq uploaded). A drive does not reach /run/persist (no flash writes in a session), so the next flight-log
++# slot's header carries the mark too (home=SEQ, u2ac-aa fl_write): prep takes the newer of the two.
++# WPA2-PSK only (this wpa_supplicant has no SAE): a WPA2/WPA3 transition network works, WPA3-only does not.
++# Test hooks (emulated selftest only): U2AC_HOME_SYS (a fake /sys/class/net), U2AC_HOME_KEEP.
++export PATH=/usr/sbin:/usr/bin:/sbin:/bin
++P=/run/persist
++H=/run/u2ac-home
++LOG=/run/log/u2ac-aa.log
++CONF=$P/u2ac-home.conf
++NET=${U2AC_HOME_SYS:-/sys/class/net}
++KEEP=${U2AC_HOME_KEEP:-30}   # groups kept on the Pushgateway: uploading seq N deletes seq N-KEEP
++cs() { read -r _u _ < /proc/uptime; _c=${_u#*.}; echo $(( ${_u%.*} * 100 + ${_c#0} )); }
++say() { _t=$(cut -d' ' -f1 /proc/uptime); echo "u2ac-home: $*"; echo "u2ac-aa: [$_t] home upload: $*" >> "$LOG"; }
++cget() { K=$1 awk 'index($0, ENVIRON["K"] "=") == 1 { print substr($0, length(ENVIRON["K"]) + 2); exit }' "$CONF" 2> /dev/null; }
++
++# conf: the settings, checked (the web UI validated them; a hand-edited file gets the same checks)
++conf() {
++    [ -s "$CONF" ] || return 1
++    SSID=$(cget SSID); PMK=$(cget PMK); URL=$(cget URL)
++    [ -n "$SSID" ] && [ ${#SSID} -le 32 ] && [ ${#PMK} = 64 ] || return 1
++    case $PMK in *[!0-9a-f]*) return 1 ;; esac
++    case $URL in http://[0-9]*) ;; *) return 1 ;; esac
++    HP=${URL#http://}; HPATH=
++    case $HP in */*) HPATH=/${HP#*/}; HP=${HP%%/*} ;; esac
++    HPATH=${HPATH%/}; HOST=${HP%:*}; PORT=${HP##*:}
++    [ "$HOST" = "$HP" ] && PORT=80
++    case $HOST.$PORT in *[!0-9.]*) return 1 ;; esac
++    BASE=http://$HP$HPATH
++}
++
++prep() {
++    rm -rf "$H/q" "$H/ready"; mkdir -p "$H/q"
++    conf || { : > "$H/ready"; return 0; }
++    _m=0; [ -s "$P/u2ac-home.sent" ] && read -r _m < "$P/u2ac-home.sent"
++    case $_m in '' | *[!0-9]*) _m=0 ;; esac
++    [ -n "${U2AC_HOME_ALL:-}" ] && _m=0
++    u2ac-aa flightlog > "$H/list" 2> /dev/null
++    if [ -z "${U2AC_HOME_ALL:-}" ]; then
++        for _h in $(sed -n 's/.* home=\([0-9][0-9]*\).*/\1/p' "$H/list"); do [ "$_h" -gt "$_m" ] && _m=$_h; done
++    fi
++    echo "$_m" > "$H/base"
++    while read -r _l; do
++        _s=$(echo "$_l" | sed -n 's/.* seq=\([0-9][0-9]*\) .*/\1/p')
++        _w=$(echo "$_l" | sed -n 's/.* why=\([A-Za-z0-9+_-]*\).*/\1/p')
++        _u=$(echo "$_l" | sed -n 's/.* up=\([0-9][0-9]*\) .*/\1/p')
++        [ -n "$_s" ] && [ "$_s" -gt "$_m" ] || continue
++        # Prometheus text as u2ac-metrics wrote it, minus the HELP lines (the Pushgateway wants each name's HELP
++        # equal across groups, and a firmware update may reword one), plus what identifies the slot
++        u2ac-aa flightlog "$_s" 2> /dev/null | sed -n '/^=== metrics$/,/^=== /p' | grep -v -e '^=== ' -e '^# HELP ' \
++            > "$H/q/$_s.tmp"
++        if grep -q '^u2ac_up 1$' "$H/q/$_s.tmp"; then
++            printf '# TYPE u2ac_flightlog_seq gauge\nu2ac_flightlog_seq %s\n# TYPE u2ac_flightlog_info gauge\nu2ac_flightlog_info{why="%s"} 1\n# TYPE u2ac_flightlog_written_seconds gauge\nu2ac_flightlog_written_seconds %s\n' \
++                "$_s" "${_w:-unknown}" "${_u:-0}" >> "$H/q/$_s.tmp"
++            mv -f "$H/q/$_s.tmp" "$H/q/$_s.prom"
++        else
++            rm -f "$H/q/$_s.tmp"   # a slot from before the exporter (no metrics part): nothing to send
++        fi
++    done < "$H/list"
++    : > "$H/ready"
++}
++
++# result STATE TEXT: this boot's outcome (u2ac-aa status, u2ac-metrics, the log). STATE: pushed absent failed none
++result() {
++    _d=$(( $(cs) - ${T0:-$(cs)} ))
++    printf '%s %s %s %s\n' "$1" "$_d" "${NPUSH:-0}" "$2" > "$H/result"
++    say "$2 ($((_d / 100)).$(printf '%02d' $((_d % 100))) s)"
++}
++
++cleanup() {
++    if [ -s "$H/wpa.pid" ]; then
++        _p=$(cat "$H/wpa.pid"); kill "$_p" 2> /dev/null
++        _n=0; while kill -0 "$_p" 2> /dev/null && [ $_n -lt 20 ]; do sleep 0.05; _n=$((_n + 1)); done
++    fi
++    pkill -x udhcpc 2> /dev/null
++    [ -s "$H/ip" ] && ip addr del "$(cat "$H/ip")" dev wlan0 2> /dev/null
++    rm -f "$H/wpa.pid" "$H/wpa.conf" "$H/ip" "$H/router"; rm -rf "$H/wpa"
++    ip link set wlan0 down 2> /dev/null
++    return 0
++}
++
++# why: what wpa_supplicant last reported, in a few words (wpa.log)
++why() {
++    awk '/WRONG_KEY|4-Way Handshake failed|pre-shared key may be incorrect/ { k++ }
++         /CTRL-EVENT-ASSOC-REJECT/ { r++; s = $0; sub(/.*status_code=/, "", s); sub(/ .*/, "", s) }
++         /Trying to associate/ { t++ }
++         END { if (k) print "wrong password (" k " key handshake failures)"
++               else if (r) print r " association rejects (status " s "), weak signal?"
++               else if (t) print t " association attempts, no answer"
++               else print "never tried to associate" }' "$H/wpa.log" 2> /dev/null
++}
++
++sec() { echo "$(($1 / 100)).$(printf '%02d' $(($1 % 100))) s"; }
++
++left() { _l=$(( (END - $(cs)) / 100 )); [ $_l -ge 1 ] || _l=1; echo $_l; }
++
++# scan FREQS (empty = every channel): the strongest BSS named SSID -> BSSID BFREQ (MHz)
++scan() {
++    _try=0
++    while :; do
++        timeout "$(left)" iw dev wlan0 scan ${1:+freq $1} ssid "$SSID" > "$H/scan" 2> "$H/scan.err" && break
++        # busy right after the interface came up: once more
++        _try=$((_try + 1)); [ $_try -lt 2 ] && [ "$(cs)" -lt "$END" ] || return 1
++        sleep 0.2
++    done
++    S=$SSID awk '
++        /^BSS / { b = substr($2, 1, 17); f = ""; s = -999 }
++        /^[ \t]*freq: / { f = $2 }
++        /^[ \t]*signal: / { s = $2 + 0 }
++        /^[ \t]*SSID: / { n = $0; sub(/^[ \t]*SSID: /, "", n)
++                          if (n == ENVIRON["S"] && b != "" && (best == "" || s > bs)) { best = b; bf = f; bs = s } }
++        END { if (best == "") exit 1; sub(/\..*/, "", bf); printf "%s %s %d\n", best, bf, bs }' "$H/scan" > "$H/found" || return 1
++    read -r BSSID BFREQ BSIG < "$H/found"
++    case $BFREQ in '' | *[!0-9]*) return 1 ;; esac
++}
++
++# del SEQ: drop an old group from the Pushgateway (busybox wget cannot send DELETE; HTTP/1.0, one request)
++del() {
++    printf 'DELETE %s/metrics/job/u2ac/log_seq/%s HTTP/1.0\r\nHost: %s\r\n\r\n' "$HPATH" "$1" "$HP" \
++        | timeout 3 nc "$HOST" "$PORT" > "$H/del.out" 2> /dev/null
++    head -n 1 "$H/del.out" 2> /dev/null | grep -q '^HTTP/1\.[01] 2'
++}
++
++push() {
++    BOX=${1:-20}; case $BOX in '' | *[!0-9]*) BOX=20 ;; esac
++    T0=$(cs); END=$((T0 + BOX * 100)); NPUSH=0
++    mkdir -p "$H"
++    conf || { result failed "not set up"; return 1; }
++    [ -e "$H/ready" ] || prep
++    set -- $(ls "$H/q" 2> /dev/null | sed -n 's/^\([0-9][0-9]*\)\.prom$/\1/p' | sort -n)
++    [ $# -gt 0 ] || { result none "nothing new to send"; return 0; }
++    trap 'cleanup; exit 1' TERM INT
++    ip link set wlan0 down 2> /dev/null; iw dev wlan0 set type managed 2> /dev/null
++    ip link set wlan0 up 2> /dev/null || { cleanup; result failed "wlan0 did not come up"; return 1; }
++    # 1. is it here? Its last channel (0.07 s on the unit), else the usual ones; by hand every channel (2.6 s)
++    F=; [ -s "$P/u2ac-home.freq" ] && read -r F < "$P/u2ac-home.freq"
++    case $F in *[!0-9]*) F= ;; esac
++    COMMON="2412 2437 2462 5180 5200 5220 5240"
++    if [ -n "$F" ]; then scan "$F" || scan "$(echo $COMMON | tr ' ' '\n' | grep -vx "$F" | tr '\n' ' ')"
++    else scan "$COMMON"; fi || { [ "$BOX" -ge 10 ] && scan ""; } || {
++        cleanup; result absent "$SSID not in range"; return 3; }
++    [ "$BFREQ" = "$F" ] || echo "$BFREQ" > "$P/u2ac-home.freq"
++    T1=$(cs)
++    # 2. join: this BSS, this channel, the stored PMK (no passphrase hashing on the A7)
++    _sh=$(printf '%s' "$SSID" | hexdump -v -e '1/1 "%02x"')
++    (umask 077; printf 'ctrl_interface=%s/wpa\nap_scan=1\nnetwork={\n\tssid=%s\n\tbssid=%s\n\tpsk=%s\n\tkey_mgmt=WPA-PSK\n\tproto=RSN\n\tieee80211w=1\n\tscan_freq=%s\n\tfreq_list=%s\n}\n' \
++        "$H" "$_sh" "$BSSID" "$PMK" "$BFREQ" "$BFREQ" > "$H/wpa.conf")
++    # in the background, not -B: its event lines (associating, rejected, connected) go to wpa.log for the result
++    wpa_supplicant -i wlan0 -D nl80211 -c "$H/wpa.conf" > "$H/wpa.log" 2>&1 &
++    echo $! > "$H/wpa.pid"
++    # joined = operstate up: wpa_supplicant keeps the link dormant until the key handshake is done
++    until [ "$(cat "$NET/wlan0/operstate" 2> /dev/null)" = up ]; do
++        if [ "$(cs)" -ge "$END" ] || ! kill -0 "$(cat "$H/wpa.pid")" 2> /dev/null; then
++            _why=$(why); cleanup; result failed "could not join $SSID ($BFREQ MHz, $BSIG dBm): $_why"; return 1
++        fi
++        sleep 0.05
++    done
++    T2=$(cs)
++    # 3. an address (and a route via its router, for a server in another subnet): DHCP asking for the last lease.
++    # dnsmasq (OpenWrt) pings an address ~3 s before it offers it to a client it has no lease for, which a 4 s box
++    # cannot wait for: there the last lease is used as it was once DHCP has had 1 s (u2ac-home.lease, from the
++    # last upload that got one; the address is held for a second or two)
++    LEASE= LROUTER=; [ -s "$P/u2ac-home.lease" ] && read -r LEASE LROUTER < "$P/u2ac-home.lease"
++    case $LEASE in *[!0-9./]*) LEASE= ;; *.*.*.*/*) ;; *) LEASE= ;; esac
++    case $LROUTER in *[!0-9.]*) LROUTER= ;; esac
++    _t=$(left); [ -n "$LEASE" ] && [ "$BOX" -lt 10 ] && _t=1
++    timeout "$_t" udhcpc -i wlan0 -f -q -n -t "$_t" -T 1 -A 1 -x hostname:u2ac ${LEASE:+-r ${LEASE%/*}} \
++        -s /usr/share/u2ac/home-dhcp.sh > /dev/null 2>&1
++    HOW=DHCP
++    if [ ! -s "$H/ip" ] && [ -n "$LEASE" ]; then
++        ip addr add "$LEASE" dev wlan0 2> /dev/null && echo "$LEASE" > "$H/ip" && HOW="the last lease"
++        [ -n "$LROUTER" ] && ip route add default via "$LROUTER" dev wlan0 2> /dev/null
++    fi
++    [ -s "$H/ip" ] || { cleanup; result failed "no address from DHCP on $SSID"; return 1; }
++    if [ "$HOW" = DHCP ]; then
++        _ls="$(cat "$H/ip") $(cat "$H/router" 2> /dev/null)"
++        [ "$(cat "$P/u2ac-home.lease" 2> /dev/null)" = "$_ls" ] || echo "$_ls" > "$P/u2ac-home.lease"
++    fi
++    T3=$(cs)
++    # 4. the bodies, oldest first; the mark moves only as far as the uploads went in order
++    _last=
++    for _s; do
++        [ "$(cs)" -lt "$END" ] || break
++        wget -q -T "$(left)" -O /dev/null --header 'Content-Type: text/plain; version=0.0.4' \
++            --post-file "$H/q/$_s.prom" "$BASE/metrics/job/u2ac/log_seq/$_s" 2> "$H/wget.err" || break
++        NPUSH=$((NPUSH + 1)); _last=$_s; rm -f "$H/q/$_s.prom"
++        [ "$_s" -gt "$KEEP" ] && del $((_s - KEEP))
++    done
++    # the mark first (before the ~1 s of cleanup, which a boot's time box may cut short)
++    if [ -n "$_last" ]; then
++        echo "$_last" > "$H/sent"
++        [ "$(cat "$P/u2ac-home.sent" 2> /dev/null)" = "$_last" ] || echo "$_last" > "$P/u2ac-home.sent"
++    fi
++    cleanup
++    if [ "$NPUSH" = $# ]; then
++        result pushed "sent $NPUSH log(s) up to seq $_last to $HP (scan $(sec $((T1 - T0))), join $(sec $((T2 - T1))) at $BSIG dBm, address $(sec $((T3 - T2))) by $HOW)"
++    elif [ "$NPUSH" -gt 0 ]; then result failed "sent $NPUSH of $# log(s), the server stopped answering"
++    else result failed "the server at $HP did not take the upload ($(head -c 80 "$H/wget.err" 2> /dev/null | tr '\n' ' '))"; fi
++    [ "$NPUSH" = $# ]
++}
++
++status() {
++    if conf; then
++        _r=; [ -s "$H/result" ] && read -r _st _d _n _r < "$H/result"
++        echo "home upload: on (to $HP over $SSID)${_r:+, this boot: $_r}"
++    else
++        echo "home upload: off"
++    fi
++}
++
++case ${1:-} in
++    prep) prep ;;
++    push) push "${2:-20}" ;;
++    cleanup) cleanup ;;
++    status) status ;;
++    *) echo "usage: u2ac-home prep|push [SECONDS]|cleanup|status" >&2; exit 2 ;;
 +esac
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-metrics b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-metrics
 new file mode 100755
-index 0000000..04cf66b
+index 0000000..29ccdbc
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-metrics
-@@ -0,0 +1,225 @@
+@@ -0,0 +1,234 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# u2ac-metrics: the dongle's health as Prometheus text (exposition format 0.0.4), for GET /cgi-bin/metrics
@@ -204121,6 +204409,7 @@ index 0000000..04cf66b
 +    -v guardoff="$([ -e "$P/u2ac-hfp-guard-off" ] && echo 1 || echo 0)" \
 +    -v fltoff="$([ -e "$P/u2ac-flightlog-off" ] && echo 1 || echo 0)" \
 +    -v sleeping="$([ -e "$R/run/u2ac-sleeping" ] && echo 1 || echo 0)" -v sleepoff="$([ -e "$P/u2ac-sleep-off" ] && echo 1 || echo 0)" \
++    -v homeon="$([ -s "$P/u2ac-home.conf" ] && echo 1 || echo 0)" -v homeres="$(head -n 1 "$R/run/u2ac-home/result" 2> /dev/null)" \
 +    -v probe="$(cat "$R/run/u2ac-usbprobe" 2> /dev/null)" -v host="$(cat "$R/run/u2ac-usbhost" 2> /dev/null)" \
 +    -v rel="$(head -n 1 "$R/etc/baseline-release" 2> /dev/null)" -v kver="$(uname -r)" '
 +function rd(f,   l) { l = ""; if ((getline l < f) <= 0) l = ""; close(f); return l }
@@ -204296,6 +204585,14 @@ index 0000000..04cf66b
 +    one("u2ac_flightlog_enabled", "gauge", "flight recorder switched on", fltoff ? 0 : 1)
 +    one("u2ac_sleep_enabled", "gauge", "car-off sleep switched on", sleepoff ? 0 : 1)
 +    one("u2ac_sleeping", "gauge", "1 while the dongle sleeps (car off, USB still powered): radios off", sleeping)
++    # the home upload of this boot (u2ac-home result: STATE CENTISECONDS LOGS TEXT); only the state goes out
++    one("u2ac_home_upload_enabled", "gauge", "home upload set up (web Settings)", homeon)
++    if (split(homeres, HR, " ") >= 3) {
++        one("u2ac_home_upload_seconds", "gauge", "how long this boot home upload took", HR[2] / 100)
++        one("u2ac_home_upload_logs", "gauge", "flight-log slots this boot home upload sent", HR[3] + 0)
++        fam("u2ac_home_upload_result", "gauge", "this boot home upload: pushed, absent (home network not in range), failed, none (nothing new)")
++        out("u2ac_home_upload_result", "result=\"" lab(HR[1]) "\"", 1)
++    }
 +}'
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/wifi-connect b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/wifi-connect
 new file mode 100755
@@ -205742,6 +206039,25 @@ index 0000000..e9300f3
 +  # Epoch deadline for on-create, on-destroy, custom-configs, on-config-changed, and websocket calls. The host increments epochs every 10 ms, so 1000 is roughly 10 seconds. Default: 1000.
 +  wasm_script_lifecycle_epoch_deadline = 1000
 +
+diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/home-dhcp.sh b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/home-dhcp.sh
+new file mode 100755
+index 0000000..abe5e88
+--- /dev/null
++++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/home-dhcp.sh
+@@ -0,0 +1,13 @@
++#!/bin/sh
++# SPDX-License-Identifier: GPL-3.0-or-later
++# udhcpc script of u2ac-home (the home upload): the address, and a default route via the network's router so a
++# Pushgateway in another subnet is reached too. No DNS (the server is given by IP), nothing outside wlan0;
++# u2ac-home cleanup removes the address again (the route goes with it).
++case ${1:-} in
++    bound | renew)
++        ip addr add "$ip/${mask:-24}" dev "$interface" 2> /dev/null && echo "$ip/${mask:-24}" > /run/u2ac-home/ip
++        [ -n "${router:-}" ] && ip route add default via "${router%% *}" dev "$interface" 2> /dev/null \
++            && echo "${router%% *}" > /run/u2ac-home/router
++        ;;
++esac
++exit 0
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/hostapd-80.conf b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/hostapd-80.conf
 new file mode 100644
 index 0000000..37c1117
@@ -205816,10 +206132,10 @@ index 0000000..b43d213
 +opt lease 86400
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md
 new file mode 100644
-index 0000000..cdbc467
+index 0000000..3ee411a
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/README.md
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,111 @@
 +# U2AC web UI
 +
 +A status and settings page for the dongle: one static `index.html` (inline CSS/JS, no external
@@ -205853,7 +206169,7 @@ index 0000000..cdbc467
 +|---|---|---|
 +| `cgi-bin/status` | GET | Dashboard object (polled every 3 s): `aa.state` (`off`, `waiting`, `connected`, `streaming`), `aa.last` (newest aa-proxy-rs log line), `mode.set` (`auto`, `dev`, `aa`) and `mode.active` (`aa`, `maint`), `svc.*` daemon booleans, `wifi` (ssid, channel, freq, width, txpower, `clients[]` with signal dBm, tx/rx bitrate, connected time, DHCP ip/host), `bt` (addr, name, powered, discoverable, paired count), `sys` (uptime, load, CPU kHz/max/governor, memory, `temp_mc` or null, build, kernel). |
 +| `cgi-bin/logs?src=S&n=N` | GET | Last N lines (20 to 500, default 200), ANSI codes stripped. S: `aa` (`/var/log/aa-proxy-rs.log`, falls back to `/run/log/aa-proxy-rs.console`), `svc` (`/run/log/u2ac-aa.log`), `hostapd`, `bt` (`/run/log/bluetoothd.log`), `web` (`/run/log/u2ac-web.log`, this UI's own change log), `dmesg`, `flight` (the flight recorder: its list, then the newest car run from its top, `u2ac-aa flightlog`). |
-+| `cgi-bin/settings` | GET | Wi-Fi name (override, else config.toml, else hostapd.conf), the SSID the AP runs now, `wifi.width` (`set` 40 or 80, `live` MHz now, `vht80`: the firmware offers 80 MHz on channel 36), `opts` (every `opt` key's current value), Bluetooth name, paired devices (`/var/lib/bluetooth/<adapter>/<device>/info`), startup mode, `pending_reboot`, whether `reboot-recovery` exists. Never the password. |
++| `cgi-bin/settings` | GET | Wi-Fi name (override, else config.toml, else hostapd.conf), the SSID the AP runs now, `wifi.width` (`set` 40 or 80, `live` MHz now, `vht80`: the firmware offers 80 MHz on channel 36), `opts` (every `opt` key's current value), Bluetooth name, paired devices (`/var/lib/bluetooth/<adapter>/<device>/info`), startup mode, `pending_reboot`, whether `reboot-recovery` exists, `home` (home upload: `set`, `ssid`, `url`, `last` = this boot's outcome). Never a password or key. |
 +| `cgi-bin/about` | GET | Versions (kernel, build, board, aa-proxy-rs, BlueZ, hostapd, iw, BusyBox; cached for the boot in `/run/u2ac-web/versions`) and cpufreq `time_in_state`. |
 +| `cgi-bin/token` | GET | The access code, when this request may see it (see Security). |
 +| `cgi-bin/action` | POST | Changes. Form-urlencoded body: `token=<code>&confirm=yes&action=<a>` plus fields below. |
@@ -205867,13 +206183,17 @@ index 0000000..cdbc467
 +| `mode` | `to=auto`, `maintenance` or `aa` | `u2ac-aa dev off`, `dev on` or `dev aa` (from the next boot). |
 +| `opt` | `key`, `value` (only these pairs) | `guard` on/off (hands-free guard, flag `u2ac-hfp-guard-off`), `flightlog` on/off (`u2ac-flightlog-off`, at once), `sleep` on/off (car-off sleep, `u2ac-sleep-off`, at once), `fastflash` on/off (NOR at 49.5 MHz during the boot, `u2ac-qspi-normal`), `led` on/off (`u2ac-led-off`, at once), `btbaud` fast/slow (`u2ac-bt-slowbaud`), `btpatch` stock/0092 (`u2ac-bt-0092`), `usbchunk` 512/1024/2048/4096/8192/16384 (`u2ac-ffs-chunk`, 16384 = default = no file). Then `u2ac-aa persist`. |
 +| `width` | `to=40` or `80` | Creates or removes `/run/persist/u2ac-wifi-80`, then `u2ac-aa persist`. The hotspot runs at 80 MHz from the next boot only when the firmware offers VHT80 on channel 36. 40 MHz is the default. |
++| `home` | `ssid`, `psk`, `url` (`psk` may stay empty when the name is unchanged) | Home upload settings: `wpa_passphrase` turns the password (given on its stdin) into the WPA2 key, and `/run/persist/u2ac-home.conf` gets `SSID=`, `PMK=` (that key, never the password) and `URL=http://A.B.C.D:PORT[/path]`, then `u2ac-aa persist`. Port 9091 when none is given. |
++| `home-off` | | Removes the home upload settings and what it learned (`u2ac-home.freq`, `u2ac-home.sent`), then `u2ac-aa persist`. |
++| `home-now` | | `u2ac-aa home-now`: an upload now. The hotspot stops for the few seconds Wi-Fi is a client of the home network. |
 +| `aa-now` | | `u2ac-aa aa-now`. |
 +| `reboot` | | `u2ac-aa persist`, then `reboot` 1 s after the reply. |
 +| `recovery` | | Same with `reboot-recovery` (only if it is on PATH). |
 +
 +Input rules, checked again on the server: Wi-Fi name 1 to 32 printable ASCII characters, password 8 to 63,
 +neither containing `"` or `\`; Bluetooth name 1 to 32 of `A-Z a-z 0-9 space _ -`; addresses
-+`XX:XX:XX:XX:XX:XX` in upper-case hex. A body holding anything other than form-urlencoded characters is
++`XX:XX:XX:XX:XX:XX` in upper-case hex. The Pushgateway address: an IPv4 address, port 1 to 65535, path of
++`A-Z a-z 0-9 . _ ~ / -` without `..` (the dongle has no DNS). A body holding anything other than form-urlencoded characters is
 +refused before decoding; decoded values outside printable ASCII are refused. User input is never
 +`eval`ed or put in a `sed`/`awk` program: it is written with `printf '%s'` or passed through awk
 +`ENVIRON`. One change runs at a time (`flock` on `/run/u2ac-web/action.lock`).
@@ -205929,10 +206249,10 @@ index 0000000..cdbc467
 +`ByeBye`, `session error` or `connection reset`).
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/_lib.sh b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/_lib.sh
 new file mode 100644
-index 0000000..238ee65
+index 0000000..65ebc78
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/_lib.sh
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,164 @@
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# u2ac web UI: helpers shared by the CGI scripts (sourced, never executed; mode 0644 so httpd will not
 +# run it). POSIX sh / BusyBox ash + BusyBox applets only. User input is never eval'd, never used in a
@@ -205946,6 +206266,7 @@ index 0000000..238ee65
 +WEB=$R/run/u2ac-web
 +TOKEN=$P/u2ac-webtoken
 +WIFI_OVR=$P/u2ac-wifi.conf
++HOMECONF=$P/u2ac-home.conf
 +AACFG=$R/etc/aa-proxy-rs/config.toml
 +BTLIB=$R/var/lib/bluetooth
 +HAPCONF=$R/usr/share/u2ac/hostapd.conf
@@ -206079,6 +206400,23 @@ index 0000000..238ee65
 +}
 +# ovrget KEY: SSID or PSK from the override file (read literally, never sourced)
 +ovrget() { K=$1 awk 'index($0, ENVIRON["K"] "=") == 1 { print substr($0, length(ENVIRON["K"]) + 2); exit }' "$WIFI_OVR" 2> /dev/null; }
++# hget KEY: SSID, PMK or URL from the home upload settings (u2ac-home), read the same way
++hget() { K=$1 awk 'index($0, ENVIRON["K"] "=") == 1 { print substr($0, length(ENVIRON["K"]) + 2); exit }' "$HOMECONF" 2> /dev/null; }
++# home_url TEXT: a Pushgateway address as http://A.B.C.D:PORT[/path] (port 9091 when none is given); fails on
++# anything else (an IPv4 address only: the dongle has no DNS)
++home_url() {
++    _u=${1#http://}; _hp=${_u%%/*}; _pa=
++    case $_u in */*) _pa=/${_u#*/} ;; esac
++    _pa=${_pa%/}; _h=${_hp%:*}; _po=${_hp##*:}
++    [ "$_h" = "$_hp" ] && _po=9091
++    case $_h in '' | *[!0-9.]*) return 1 ;; esac
++    H=$_h awk 'BEGIN { n = split(ENVIRON["H"], a, "."); if (n != 4) exit 1
++        for (i = 1; i <= 4; i++) if (a[i] == "" || length(a[i]) > 3 || a[i] + 0 > 255) exit 1 }' || return 1
++    case $_po in '' | *[!0-9]*) return 1 ;; esac
++    [ ${#_po} -le 5 ] && [ "$_po" -ge 1 ] && [ "$_po" -le 65535 ] || return 1
++    case $_pa in *[!A-Za-z0-9._~/-]* | *..*) return 1 ;; esac
++    printf 'http://%s:%s%s' "$_h" "$_po" "$_pa"
++}
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/about b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/about
 new file mode 100755
 index 0000000..b88e822
@@ -206121,10 +206459,10 @@ index 0000000..b88e822
 +}' "$V"
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/action b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/action
 new file mode 100755
-index 0000000..cf9f7c6
+index 0000000..4984259
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/action
-@@ -0,0 +1,195 @@
+@@ -0,0 +1,239 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# POST /cgi-bin/action (application/x-www-form-urlencoded), fields:
@@ -206133,6 +206471,9 @@ index 0000000..cf9f7c6
 +#                                  password 8-63 printable ASCII without " or \, Bluetooth name 1-32 [A-Za-z0-9 _-])
 +#   forget    dev=<AA:BB:CC:DD:EE:FF>|all
 +#   mode      to=auto|maintenance|aa
++#   home      ssid= psk= url=     (home upload: the home Wi-Fi and a Pushgateway's IPv4 address[:port][/path];
++#                                  psk may stay empty when the name is unchanged; only the derived key is kept)
++#   home-off | home-now
 +#   aa-now | reboot | recovery
 +# -> {"ok":true,"msg":"...","reboot":bool} or {"ok":false,"error":"...","code":"token|input|..."}
 +_d=${0%/*}; [ "$_d" = "$0" ] && _d=.
@@ -206299,6 +206640,47 @@ index 0000000..cf9f7c6
 +    : > "$WEB/pending-reboot"
 +    ok "$M It applies after a reboot." true
 +    ;;
++home)
++    # the home upload (u2ac-home). The password is turned into the WPA2 key at once (wpa_passphrase, the key
++    # depends on the name too) and is never written anywhere; it reaches wpa_passphrase on stdin, not argv
++    field ssid; NS=; [ -n "$FV" ] && { NS=$(urldec "$FV") || fail "the home Wi-Fi name has a character that is not allowed" input; }
++    field psk; NP=; [ -n "$FV" ] && { NP=$(urldec "$FV") || fail "the password has a character that is not allowed" input; }
++    field url; NU=; [ -n "$FV" ] && { NU=$(urldec "$FV") || fail "the server address has a character that is not allowed" input; }
++    valid_ssid "$NS" || fail "home Wi-Fi name: 1 to 32 characters, no \" or \\" input
++    [ -z "$NP" ] || valid_psk "$NP" || fail "home Wi-Fi password: 8 to 63 characters, no \" or \\" input
++    NU=$(home_url "$NU") || fail "server: an IPv4 address with an optional port and path, like 192.168.1.10:9091" input
++    OS=$(hget SSID); OK=$(hget PMK)
++    if [ -n "$NP" ]; then
++        K=$(printf '%s\n' "$NP" | wpa_passphrase "$NS" 2> /dev/null \
++            | awk '$1 ~ /^psk=[0-9a-f]+$/ && length($1) == 68 { print substr($1, 5); exit }')
++        [ ${#K} = 64 ] || fail "could not derive the Wi-Fi key (wpa_passphrase)" service
++    elif [ "$NS" = "$OS" ] && [ ${#OK} = 64 ]; then K=$OK
++    else fail "enter the home Wi-Fi password too (the key depends on the name)" input; fi
++    mkdir -p "$P"
++    _hc=$WEB/home.$$
++    (umask 077; printf 'SSID=%s\nPMK=%s\nURL=%s\n' "$NS" "$K" "$NU" > "$_hc") || fail "could not write the settings" persist
++    if cmp -s "$_hc" "$HOMECONF" 2> /dev/null; then rm -f "$_hc"; ok "Nothing changed: these are the current settings."; fi
++    mv -f "$_hc" "$HOMECONF" || { rm -f "$_hc"; fail "could not write /run/persist/u2ac-home.conf" persist; }
++    # another network: its channel is learned again
++    [ "$NS" = "$OS" ] || rm -f "$P/u2ac-home.freq"
++    weblog "home upload set (ssid ${#NS} chars)"
++    run u2ac-aa persist || fail "saved for this boot, but writing the persistent store failed (see the Service log)" persist
++    ok "Saved. The dongle sends its drive logs when it starts near your home network. Use Upload now to try it."
++    ;;
++home-off)
++    rm -f "$HOMECONF" "$P/u2ac-home.freq" "$P/u2ac-home.sent" || fail "could not change the setting" persist
++    weblog "home upload off"
++    run u2ac-aa persist || fail "turned off for this boot, but writing the persistent store failed" persist
++    ok "Home upload off. The dongle forgot the home network."
++    ;;
++home-now)
++    [ -s "$HOMECONF" ] || fail "the home upload is not set up" input
++    run ${TO:+timeout 60} u2ac-aa home-now; _rc=$?
++    weblog "home upload by hand: rc $_rc"
++    _m=$(printf '%s\n' "$OUT" | tail -n 1)
++    [ $_rc = 0 ] && ok "Upload: $_m."
++    fail "upload: ${_m:-no answer}" upload
++    ;;
 +aa-now)
 +    run u2ac-aa aa-now || fail "could not start Android Auto" service
 +    weblog "aa-now"
@@ -206376,10 +206758,10 @@ index 0000000..51ed059
 +exec u2ac-metrics
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/settings b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/settings
 new file mode 100755
-index 0000000..14051e8
+index 0000000..10fd9d6
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/cgi-bin/settings
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,73 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# GET /cgi-bin/settings -> current Wi-Fi name and channel width, Bluetooth name, paired phones, mode, what a reboot would
@@ -206426,9 +206808,15 @@ index 0000000..14051e8
 +OU=16384; [ -s "$P/u2ac-ffs-chunk" ] && read -r OU < "$P/u2ac-ffs-chunk"
 +case $OU in 512 | 1024 | 2048 | 4096 | 8192 | 16384) ;; *) OU=16384 ;; esac
 +
++# home upload (u2ac-home): the network name, the server and this boot's outcome; never the key
++HSET=false HSSID= HURL= HLAST=
++if [ -s "$HOMECONF" ]; then HSET=true; HSSID=$(hget SSID); HURL=$(hget URL); fi
++[ -s "$R/run/u2ac-home/result" ] && HLAST=$(head -n 1 "$R/run/u2ac-home/result" | cut -d' ' -f4-)
++
 +hdr
 +printf '{"ok":true,"opts":{"guard":"%s","flightlog":"%s","led":"%s","btbaud":"%s","btpatch":"%s","usbchunk":%s,"sleep":"%s","fastflash":"%s"},' \
 +    "$OG" "$OF" "$OL" "$OB" "$OP" "$OU" "$OS" "$OQ"
++printf '"home":{"set":%s,"ssid":%s,"url":%s,"last":%s},' "$HSET" "$(jstr "$HSSID")" "$(jstr "$HURL")" "$(jstr "$HLAST")"
 +printf '"wifi":{"ssid":%s,"live_ssid":%s,"override":%s,"width":{"set":%s,"live":%s,"vht80":%s}},"bt":{"alias":%s},"mode":"%s","pending_reboot":%s,"recovery":%s,"aaproxy_web":%s,"paired":[' \
 +    "$(jstr "$SSID")" "$(jstr "$LIVE")" "$OVR" "$WSET" "${WLIVE:-null}" "$V80" "$(jstr "$ALIAS")" "$MODE" "$PENDING" "$REC" "$(jstr "$WEBSRV")"
 +_sep=
@@ -206641,10 +207029,10 @@ index 0000000..4d93e02
 +fi
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/index.html b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/index.html
 new file mode 100644
-index 0000000..50b2c23
+index 0000000..12460eb
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/share/u2ac/www/index.html
-@@ -0,0 +1,508 @@
+@@ -0,0 +1,537 @@
 +<!doctype html>
 +<html lang="en">
 +<head>
@@ -206822,6 +207210,19 @@ index 0000000..50b2c23
 +    <label class="opt"><input type="checkbox" data-key="sleep" data-on="on" data-off="off" data-when="now"><b>Sleep when the car is off</b><span class="sub">If the car keeps the USB port powered after a drive, the dongle turns its radios off after 90 s and stops calling your phone. The car wakes it again.</span></label>
 +    <label class="opt"><input type="checkbox" data-key="led" data-on="on" data-off="off" data-when="now"><b>Status light</b><span class="sub">The coloured light. Off saves about 5 to 20 mA.</span></label>
 +  </div>
++
++  <h2>Home upload</h2>
++  <form class="panel" id="f-home" novalidate autocomplete="off">
++    <p class="sub">When a drive starts near home, the dongle sends the health numbers of its last drives to a Prometheus Pushgateway on your network (for Grafana). It tries for at most 4 seconds, before its hotspot starts. A 2.4 GHz network, or 5 GHz on channels 36 to 48. WPA2.</p>
++    <p class="sub" id="h-now"></p>
++    <label for="i-hssid">Home Wi-Fi name</label>
++    <input type="text" id="i-hssid" maxlength="32" spellcheck="false"><div class="err" id="e-hssid"></div>
++    <label for="i-hpsk">Home Wi-Fi password<span class="sub">The dongle keeps only a key made from it. Leave empty to keep the current one.</span></label>
++    <input type="password" id="i-hpsk" maxlength="63" spellcheck="false" autocomplete="new-password"><div class="err" id="e-hpsk"></div>
++    <label for="i-hurl">Pushgateway address<span class="sub">IP address and port, for example 192.168.1.10:9091.</span></label>
++    <input type="text" id="i-hurl" maxlength="80" spellcheck="false" inputmode="url"><div class="err" id="e-hurl"></div>
++    <div class="btns"><button class="btn pri" type="submit">Save home upload</button><button class="btn" type="button" id="b-hnow" hidden>Upload now</button><button class="btn dng" type="button" id="b-hoff" hidden>Turn off</button></div>
++  </form>
 +
 +  <h2>Troubleshooting</h2>
 +  <form class="panel" id="f-usb">
@@ -207046,6 +207447,9 @@ index 0000000..50b2c23
 +    const o = c.opts || {}; $$("input[data-key]").forEach(i => i.checked = String(o[i.dataset.key]) === i.dataset.on);
 +    $$("#f-usb input").forEach(r => r.checked = r.value === String(o.usbchunk || 16384));
 +    $("#w-now").textContent = (w.live ? "Running now: " + w.live + " MHz." : "") + (w.vht80 === false ? " This unit's Wi-Fi firmware does not offer 80 MHz, so it stays at 40." : "");
++    const h = c.home || {}; $("#i-hssid").value = h.ssid || ""; $("#i-hurl").value = (h.url || "").replace(/^http:\/\//, ""); $("#i-hpsk").value = "";
++    $("#h-now").textContent = h.set ? "On." + (h.last ? " This boot: " + h.last + "." : "") : "Off.";
++    $("#b-hnow").hidden = $("#b-hoff").hidden = !h.set;
 +    const d = $("#devs"); d.replaceChildren();
 +    if (!c.paired.length) d.append(el("div", "empty", "No phone is paired. Pair one from the phone's Bluetooth settings: it lists the dongle as " + (c.bt.alias || "its Bluetooth name") + "."));
 +    for (const p of c.paired) {
@@ -207088,6 +207492,19 @@ index 0000000..50b2c23
 +  const prm = {action: "wifi", ssid: s}; if (p) prm.psk = p; if (a) prm.alias = a;
 +  act(prm, "Save the Wi-Fi settings?", "They apply after a reboot. Then your phone joins " + s + (p ? " with the new password" : "") + ", and you may need to pair it again if the Bluetooth name changed.", "Save");
 +};
++$("#f-home").onsubmit = e => {
++  e.preventDefault();
++  const h = (CFG && CFG.home) || {}, s = $("#i-hssid").value, p = $("#i-hpsk").value, u = $("#i-hurl").value.trim();
++  const needP = !h.set || s !== h.ssid;
++  const okS = check("hssid", !s.length ? "Enter the home Wi-Fi name." : s.length > 32 || !OKS.test(s) || /["\\]/.test(s) ? "Use 1 to 32 plain characters, without \" or \\." : "");
++  const okP = check("hpsk", !p && needP ? "Enter the home Wi-Fi password." : p && (p.length < 8 || p.length > 63 || !OKS.test(p) || /["\\]/.test(p)) ? "Use 8 to 63 plain characters, without \" or \\." : "");
++  const okU = check("hurl", !/^(http:\/\/)?(\d{1,3}\.){3}\d{1,3}(:\d{1,5})?(\/[A-Za-z0-9._~\/-]*)?$/.test(u) ? "An IP address with a port, like 192.168.1.10:9091." : "");
++  if (!okS || !okP || !okU) return;
++  const prm = {action: "home", ssid: s, url: u}; if (p) prm.psk = p;
++  act(prm, "Save the home upload?", "The dongle joins " + s + " for a few seconds when a drive starts near home, before its hotspot starts.", "Save");
++};
++$("#b-hnow").onclick = () => act({action: "home-now"}, "Upload now?", "The hotspot stops for a few seconds while the dongle joins your home network. A connected phone reconnects by itself.", "Upload");
++$("#b-hoff").onclick = () => act({action: "home-off"}, "Turn off the home upload?", "The dongle forgets the home network and stops uploading.", "Turn off", true);
 +$("#f-width").onsubmit = e => {
 +  e.preventDefault();
 +  const r = $("#f-width input:checked"); if (!r) return;
