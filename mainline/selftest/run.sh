@@ -197,7 +197,8 @@ for sc in car carncm computer dev; do
     && { [ $carish = 0 ] || echo "$out" | grep -q '^metric: u2ac_aa_proxy_rss_bytes [0-9]'; } \
     && ok "health exporter: $sc" || { bad "health exporter: $sc"; echo "$out" | grep -- '--- metrics\|^metric:\|^BAD\|^DUP\|^OUTSIDE'; }
   # what started this boot (WDOG1 reset source, devmem stub = power-on), and the drive records in car modes
-  echo "$out" | grep -q -- '--- reset: power' && ok "reset cause recorded: $sc" || bad "reset cause: $sc"
+  echo "$out" | grep -q -- '--- reset: power bootfails=2$' && ok "reset cause and failed boot attempts: $sc" \
+    || { bad "reset cause / boot attempts: $sc"; echo "$out" | grep -- '--- reset'; }
   if [ $carish = 1 ]; then
     echo "$out" | grep -q -- '--- drive records: [2-9][0-9]* last=\[D1 up=[0-9]* t=x ls=[0-9]* ses=[0-9]* err=[0-9]* ring=[0-9]* rst=[0-9]* rep=[0-9]* tmax=x smin=-45 sta=1 ' \
       && ok "drive records in the slot: $sc" || { bad "drive records: $sc"; echo "$out" | grep -- '--- drive'; }

@@ -76,6 +76,10 @@ printf '\000\220\235\000\000\000\000\000' | dd of=$MTD_DEV/mtd3 bs=1 seek=40 con
 printf '#!/bin/sh\ntr "\\000" "\\377" < /dev/zero | head -c $(($3 * 65536)) | dd of="$1" bs=65536 seek=$(($2 / 65536)) conv=notrunc 2> /dev/null\n' > /fake/erase
 chmod +x /fake/erase
 SQ0=$(head -c 11927552 $MTD_DEV/mtd3 | md5sum | cut -d' ' -f1)
+# the boot-slot counter: two attempts that never came up, then this boot (slot 2, still 00ff before rcS marks it)
+mkdir -p $MTD_SYS/mtd5; echo bootstate > $MTD_SYS/mtd5/name; echo 65536 > $MTD_SYS/mtd5/size; echo 65536 > $MTD_SYS/mtd5/erasesize
+tr '\000' '\377' < /dev/zero | head -c 65536 > $MTD_DEV/mtd5
+printf '\000\377\000\377\000\377' | dd of=$MTD_DEV/mtd5 bs=1 seek=4096 conv=notrunc 2> /dev/null; echo 2 > /run/bootslot
 if [ "$SCEN" = carhome ]; then
     # set up, the home network in range, a Pushgateway stand-in (nc: busybox httpd has no DELETE) on 127.0.0.1,
     # and slot seq 7 (a drive with metrics) in the flight log, as fl_write lays it out
@@ -133,7 +137,7 @@ echo "--- flightlog last: $(u2ac-aa flightlog last 2>&1 | grep -c '^=== ')"
 case $SCEN in car | carncm | carhome)
     n=0; until [ "$(u2ac-aa flightlog last 2> /dev/null | grep -c '^D1 ')" -ge 2 ] || [ $n -ge 40 ]; do sleep 0.5; n=$((n + 1)); done ;; esac
 echo "--- drive records: $(u2ac-aa flightlog last 2> /dev/null | grep -c '^D1 ') last=[$(u2ac-aa flightlog last 2> /dev/null | grep '^D1 ' | tail -n 1)]"
-echo "--- reset: $(cat /run/u2ac-reset 2> /dev/null)"
+echo "--- reset: $(cat /run/u2ac-reset 2> /dev/null) bootfails=$(cat /run/u2ac-bootfails 2> /dev/null)"
 if [ "$SCEN" = carhome ]; then
     # sent at boot before the hotspot came up; the slot this boot writes (seq 8, 90 s in) carries the mark home=7
     n=0; until u2ac-aa flightlog 2> /dev/null | grep -q ' seq=8 ' || [ $n -ge 30 ]; do sleep 0.5; n=$((n + 1)); done

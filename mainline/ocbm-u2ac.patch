@@ -203171,10 +203171,10 @@ index 0000000..8114b82
 \ No newline at end of file
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
 new file mode 100755
-index 0000000..a6fea8f
+index 0000000..24aa77f
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
-@@ -0,0 +1,1001 @@
+@@ -0,0 +1,1007 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# u2ac-aa start|stop|status|persist|aa-now|watch|home-now [all]|dev on|off|aa|flightlog [last|SEQ]  (Carlinkit U2AC, milouk 2026-11-26)
@@ -203961,7 +203961,13 @@ index 0000000..a6fea8f
 +    _w=$(devmem 0x020BC004 16 2> /dev/null); case $_w in 0x[0-9a-fA-F]*) _w=$((_w)) ;; *) _w=0 ;; esac
 +    if [ $((_w & 16)) != 0 ]; then echo power; elif [ $((_w & 2)) != 0 ]; then echo watchdog
 +    elif [ $((_w & 1)) != 0 ]; then echo software; else echo unknown; fi > /run/u2ac-reset
-+    _bs=$(mtd_num bootstate 2> /dev/null) && bootslot_scan "$_bs" 2> /dev/null | awk '{ print $2 + 0 }' > /run/u2ac-bootfails
++    # (the attempts right BEFORE this boot's own slot, /run/bootslot from the init: this boot's slot reads 00ff =
++    # "attempted" until rcS marks it 0000, so bootslot_scan's count would include this boot, or race with the mark)
++    _bi=$(cat /run/bootslot 2> /dev/null); _bs=$(mtd_num bootstate 2> /dev/null)
++    case $_bi in '' | *[!0-9]*) ;; *) [ -n "$_bs" ] && { [ "$_bi" -gt 0 ] && hexdump -v -s "$BOOTSLOT_BASE" -n $((_bi * 2)) \
++        -e '2/1 "%02x" " "' "$MTD_DEV/mtd$_bs" 2> /dev/null; echo; } | awk '{ for (i = 1; i <= NF; i++)
++            if ($i == "0000" || $i == "0055" || $i == "5555" || $i == "55ff") f = 0; else f++ } END { print f + 0 }' \
++        > /run/u2ac-bootfails ;; esac
 +    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$g" 2>/dev/null; done
 +    echo 1 > /proc/sys/vm/overcommit_memory   # aa-proxy-rs reserves ~1 GiB of address space up front
 +    echo 4096 > /proc/sys/vm/min_free_kbytes  # keep atomic-allocation headroom for SDIO/USB/net (no compaction)
