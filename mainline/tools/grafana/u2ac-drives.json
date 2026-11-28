@@ -9,12 +9,15 @@
  "description": "Carlinkit U2AC mainline firmware: per-drive health from the flight log, sent by the home upload (Pushgateway job u2ac).",
  "timezone": "browser",
  "editable": true,
- "graphTooltip": 0,
+ "graphTooltip": 1,
  "schemaVersion": 39,
  "refresh": "",
  "time": {
   "from": "now-90d",
   "to": "now"
+ },
+ "timepicker": {
+  "hidden": false
  },
  "templating": {
   "list": [
@@ -31,18 +34,47 @@
  },
  "panels": [
   {
+   "type": "text",
+   "title": "",
+   "gridPos": {
+    "h": 2,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   },
+   "transparent": true,
+   "options": {
+    "mode": "markdown",
+    "content": "**One bar or row per drive** (the dongle's flight-log number). A drive's numbers arrive at the start of the next drive from home, so the newest drive shows up then. Start-up times are seconds from power-on. Hover a panel title for what it measures."
+   },
+   "id": 1
+  },
+  {
+   "type": "row",
+   "title": "Latest drive",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 2
+   },
+   "panels": [],
+   "id": 2
+  },
+  {
    "type": "stat",
-   "title": "Android Auto on screen",
-   "description": "Seconds from power-on to the car showing Android Auto, latest drive uploaded.",
+   "title": "AA on screen",
+   "description": "Seconds from power-on until Android Auto was on the car screen.",
    "datasource": {
     "type": "prometheus",
     "uid": "${ds}"
    },
    "gridPos": {
     "h": 4,
-    "w": 4,
+    "w": 3,
     "x": 0,
-    "y": 0
+    "y": 3
    },
    "targets": [
     {
@@ -60,6 +92,7 @@
     "defaults": {
      "unit": "s",
      "decimals": 1,
+     "noValue": "\u2013",
      "color": {
       "mode": "thresholds"
      },
@@ -71,7 +104,7 @@
         "value": null
        },
        {
-        "color": "yellow",
+        "color": "#EAB839",
         "value": 26
        },
        {
@@ -79,7 +112,20 @@
         "value": 35
        }
       ]
-     }
+     },
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
     },
     "overrides": []
    },
@@ -94,12 +140,15 @@
     "colorMode": "value",
     "graphMode": "none",
     "textMode": "value",
-    "justifyMode": "auto"
-   }
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 3
   },
   {
    "type": "stat",
-   "title": "Phone on the hotspot",
+   "title": "On hotspot",
    "description": "Seconds from power-on until the phone reported it joined the dongle's Wi-Fi.",
    "datasource": {
     "type": "prometheus",
@@ -107,9 +156,9 @@
    },
    "gridPos": {
     "h": 4,
-    "w": 4,
-    "x": 4,
-    "y": 0
+    "w": 3,
+    "x": 3,
+    "y": 3
    },
    "targets": [
     {
@@ -127,6 +176,7 @@
     "defaults": {
      "unit": "s",
      "decimals": 1,
+     "noValue": "\u2013",
      "color": {
       "mode": "thresholds"
      },
@@ -138,7 +188,7 @@
         "value": null
        },
        {
-        "color": "yellow",
+        "color": "#EAB839",
         "value": 18
        },
        {
@@ -146,74 +196,20 @@
         "value": 25
        }
       ]
-     }
-    },
-    "overrides": []
-   },
-   "options": {
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ],
-     "fields": "",
-     "values": false
-    },
-    "colorMode": "value",
-    "graphMode": "none",
-    "textMode": "value",
-    "justifyMode": "auto"
-   }
-  },
-  {
-   "type": "stat",
-   "title": "Phone called",
-   "description": "Seconds from power-on to the dongle's first Bluetooth call to the phone.",
-   "datasource": {
-    "type": "prometheus",
-    "uid": "${ds}"
-   },
-   "gridPos": {
-    "h": 4,
-    "w": 4,
-    "x": 8,
-    "y": 0
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "prometheus",
-      "uid": "${ds}"
      },
-     "expr": "max(u2ac_aa_event_seconds{event=\"bt_try\"} and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_aa_event_seconds{event=\"bt_try\"}))))",
-     "instant": true,
-     "range": false
-    }
-   ],
-   "fieldConfig": {
-    "defaults": {
-     "unit": "s",
-     "decimals": 1,
-     "color": {
-      "mode": "thresholds"
-     },
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "green",
-        "value": null
-       },
-       {
-        "color": "yellow",
-        "value": 12
-       },
-       {
-        "color": "red",
-        "value": 15
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
        }
-      ]
-     }
+      }
+     ]
     },
     "overrides": []
    },
@@ -228,22 +224,25 @@
     "colorMode": "value",
     "graphMode": "none",
     "textMode": "value",
-    "justifyMode": "auto"
-   }
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 4
   },
   {
    "type": "stat",
-   "title": "Drives",
-   "description": "Drives with Android Auto in the selected time range.",
+   "title": "Drive length",
+   "description": "How long the dongle was powered (within a minute: it records once a minute).",
    "datasource": {
     "type": "prometheus",
     "uid": "${ds}"
    },
    "gridPos": {
     "h": 4,
-    "w": 4,
-    "x": 12,
-    "y": 0
+    "w": 3,
+    "x": 6,
+    "y": 3
    },
    "targets": [
     {
@@ -252,15 +251,16 @@
       "type": "prometheus",
       "uid": "${ds}"
      },
-     "expr": "count(count by (log_seq) (max_over_time(u2ac_flightlog_info{why=\"session+60s\"}[$__range]))) or vector(0)",
+     "expr": "max(u2ac_drive_seconds and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_drive_seconds))))",
      "instant": true,
      "range": false
     }
    ],
    "fieldConfig": {
     "defaults": {
-     "unit": "none",
+     "unit": "dtdurations",
      "decimals": 0,
+     "noValue": "\u2013",
      "color": {
       "mode": "thresholds"
      },
@@ -272,7 +272,20 @@
         "value": null
        }
       ]
-     }
+     },
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
     },
     "overrides": []
    },
@@ -287,22 +300,25 @@
     "colorMode": "value",
     "graphMode": "none",
     "textMode": "value",
-    "justifyMode": "auto"
-   }
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 5
   },
   {
    "type": "stat",
-   "title": "Starts without Android Auto",
-   "description": "Power-ons where no Android Auto session started within 90 s (for example a phone VPN).",
+   "title": "Drops",
+   "description": "Times Android Auto stopped and restarted during the drive.",
    "datasource": {
     "type": "prometheus",
     "uid": "${ds}"
    },
    "gridPos": {
     "h": 4,
-    "w": 4,
-    "x": 16,
-    "y": 0
+    "w": 3,
+    "x": 9,
+    "y": 3
    },
    "targets": [
     {
@@ -311,7 +327,7 @@
       "type": "prometheus",
       "uid": "${ds}"
      },
-     "expr": "count(count by (log_seq) (max_over_time(u2ac_flightlog_info{why=\"start+90s\"}[$__range]))) or vector(0)",
+     "expr": "max(u2ac_drive_drops and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_drive_drops))))",
      "instant": true,
      "range": false
     }
@@ -320,6 +336,7 @@
     "defaults": {
      "unit": "none",
      "decimals": 0,
+     "noValue": "\u2013",
      "color": {
       "mode": "thresholds"
      },
@@ -335,7 +352,20 @@
         "value": 1
        }
       ]
-     }
+     },
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
     },
     "overrides": []
    },
@@ -350,22 +380,345 @@
     "colorMode": "value",
     "graphMode": "none",
     "textMode": "value",
-    "justifyMode": "auto"
-   }
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 6
   },
   {
    "type": "stat",
-   "title": "Last upload",
-   "description": "When the dongle last sent its drive logs (at the start of a drive near home).",
+   "title": "Peak temp",
+   "description": "Highest chip temperature during the drive. It throttles at 85 \u00b0C.",
    "datasource": {
     "type": "prometheus",
     "uid": "${ds}"
    },
    "gridPos": {
     "h": 4,
+    "w": 3,
+    "x": 12,
+    "y": 3
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max(u2ac_drive_temperature_max_celsius and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_drive_temperature_max_celsius))))",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "celsius",
+     "decimals": 0,
+     "noValue": "\u2013",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "#EAB839",
+        "value": 70
+       },
+       {
+        "color": "red",
+        "value": 80
+       }
+      ]
+     },
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 7
+  },
+  {
+   "type": "stat",
+   "title": "Worst signal",
+   "description": "Weakest Wi-Fi signal from the phone during the drive (closer to 0 is better).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 3,
+    "x": 15,
+    "y": 3
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max(u2ac_drive_signal_min_dbm and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_drive_signal_min_dbm))))",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "dBm",
+     "decimals": 0,
+     "noValue": "\u2013",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "#EAB839",
+        "value": -80
+       },
+       {
+        "color": "green",
+        "value": -70
+       }
+      ]
+     },
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 8
+  },
+  {
+   "type": "stat",
+   "title": "Data relayed",
+   "description": "Wi-Fi data between phone and dongle during the drive (mostly the video to the car).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 3,
+    "x": 18,
+    "y": 3
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "(max(u2ac_drive_rx_bytes and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_drive_rx_bytes))))) + (max(u2ac_drive_tx_bytes and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_drive_tx_bytes)))))",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "decbytes",
+     "decimals": 0,
+     "noValue": "\u2013",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 9
+  },
+  {
+   "type": "stat",
+   "title": "Started",
+   "description": "Wall-clock start of the latest drive that began at home (only those drives learn the time).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 3,
+    "x": 21,
+    "y": 3
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max(u2ac_drive_start_timestamp_seconds and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_drive_start_timestamp_seconds)))) * 1000",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "dateTimeAsLocalNoDateIfToday",
+     "decimals": 0,
+     "noValue": "\u2013",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 10
+  },
+  {
+   "type": "stat",
+   "title": "Last upload",
+   "description": "When the dongle last sent its drive logs.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 3,
     "w": 4,
-    "x": 20,
-    "y": 0
+    "x": 0,
+    "y": 7
    },
    "targets": [
     {
@@ -383,6 +736,7 @@
     "defaults": {
      "unit": "dateTimeFromNow",
      "decimals": 0,
+     "noValue": "\u2013",
      "color": {
       "mode": "thresholds"
      },
@@ -394,7 +748,20 @@
         "value": null
        }
       ]
-     }
+     },
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
     },
     "overrides": []
    },
@@ -409,22 +776,25 @@
     "colorMode": "value",
     "graphMode": "none",
     "textMode": "value",
-    "justifyMode": "auto"
-   }
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 11
   },
   {
-   "type": "barchart",
-   "title": "Start-up per drive",
-   "description": "Seconds from power-on, per drive (flight-log sequence number).",
+   "type": "stat",
+   "title": "Drives",
+   "description": "Drives with Android Auto in the selected time range.",
    "datasource": {
     "type": "prometheus",
     "uid": "${ds}"
    },
    "gridPos": {
-    "h": 9,
-    "w": 24,
-    "x": 0,
-    "y": 4
+    "h": 3,
+    "w": 4,
+    "x": 4,
+    "y": 7
    },
    "targets": [
     {
@@ -433,35 +803,480 @@
       "type": "prometheus",
       "uid": "${ds}"
      },
+     "expr": "count(count by (log_seq) (max_over_time(u2ac_flightlog_info{why=\"session+60s\"}[$__range]))) or vector(0)",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "noValue": "\u2013",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 12
+  },
+  {
+   "type": "stat",
+   "title": "Slow or failed starts",
+   "description": "Power-ons with no Android Auto session in the first 90 s (a phone VPN, Bluetooth off, no phone).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 3,
+    "w": 4,
+    "x": 8,
+    "y": 7
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "count(count by (log_seq) (max_over_time(u2ac_flightlog_info{why=\"start+90s\"}[$__range]))) or vector(0)",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "noValue": "\u2013",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 13
+  },
+  {
+   "type": "stat",
+   "title": "Hotspot devices",
+   "description": "Different devices that joined the dongle's Wi-Fi in the latest drive. More than 1 means not only your phone.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 3,
+    "w": 4,
+    "x": 12,
+    "y": 7
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max(u2ac_drive_hotspot_devices and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_drive_hotspot_devices))))",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "noValue": "\u2013",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 2
+       }
+      ]
+     },
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 14
+  },
+  {
+   "type": "stat",
+   "title": "How it started",
+   "description": "What started the dongle for the latest drive: a power-on is normal; a reboot or the watchdog is not.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 3,
+    "w": 4,
+    "x": 16,
+    "y": 7
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max(((u2ac_last_reset{cause=\"power\"} * 1) or (u2ac_last_reset{cause=\"software\"} * 2) or (u2ac_last_reset{cause=\"watchdog\"} * 3) or (u2ac_last_reset{cause=\"unknown\"} * 4)) and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_last_reset))))",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "noValue": "\u2013",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "Power-on",
+         "color": "green",
+         "index": 0
+        },
+        "2": {
+         "text": "Reboot",
+         "color": "#EAB839",
+         "index": 1
+        },
+        "3": {
+         "text": "Watchdog",
+         "color": "red",
+         "index": 2
+        },
+        "4": {
+         "text": "Unknown",
+         "color": "text",
+         "index": 3
+        }
+       }
+      },
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 15
+  },
+  {
+   "type": "stat",
+   "title": "Repairs",
+   "description": "Radio daemon repairs plus relay restarts in the latest drive.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 3,
+    "w": 4,
+    "x": 20,
+    "y": 7
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "(max(u2ac_drive_radio_repairs and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_drive_radio_repairs))))) + (max(u2ac_drive_relay_restarts and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_drive_relay_restarts)))))",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "noValue": "\u2013",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "#EAB839",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 16
+  },
+  {
+   "type": "row",
+   "title": "Start-up",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 10
+   },
+   "panels": [],
+   "id": 17
+  },
+  {
+   "type": "barchart",
+   "title": "Where the start-up time goes",
+   "description": "Per drive, stacked: power-on until the dongle calls the phone over Bluetooth, then until the phone is on the dongle's Wi-Fi, then until the car shows Android Auto. The bar's height is the time to Android Auto.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 9,
+    "w": 16,
+    "x": 0,
+    "y": 11
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max by (log_seq) (max_over_time(u2ac_aa_event_seconds{event=\"bt_try\"}[$__range]))",
      "instant": true,
      "range": false,
-     "format": "table",
-     "expr": "max by (log_seq, event) (max_over_time(u2ac_aa_event_seconds{event=~\"bt_try|wifi_joined|proxying\"}[$__range]))"
+     "format": "table"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "clamp_min(max by (log_seq) (max_over_time(u2ac_aa_event_seconds{event=\"wifi_joined\"}[$__range])) - max by (log_seq) (max_over_time(u2ac_aa_event_seconds{event=\"bt_try\"}[$__range])), 0)",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    },
+    {
+     "refId": "C",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "clamp_min(max by (log_seq) (max_over_time(u2ac_aa_event_seconds{event=\"proxying\"}[$__range])) - max by (log_seq) (max_over_time(u2ac_aa_event_seconds{event=\"wifi_joined\"}[$__range])), 0)",
+     "instant": true,
+     "range": false,
+     "format": "table"
     }
    ],
    "transformations": [
     {
-     "id": "groupingToMatrix",
-     "options": {
-      "columnField": "event",
-      "rowField": "log_seq",
-      "valueField": "Value"
-     }
+     "id": "merge",
+     "options": {}
     },
     {
      "id": "organize",
      "options": {
-      "renameByName": {
-       "log_seq\\event": "Drive",
-       "bt_try": "Phone called",
-       "wifi_joined": "Phone on hotspot",
-       "proxying": "Android Auto on screen"
+      "excludeByName": {
+       "Time": true
       },
-      "indexByName": {
-       "log_seq\\event": 0,
-       "bt_try": 1,
-       "wifi_joined": 2,
-       "proxying": 3
+      "renameByName": {
+       "log_seq": "Drive",
+       "Value #A": "Dongle starts, calls phone",
+       "Value #B": "Phone joins hotspot",
+       "Value #C": "Car switches to Android Auto"
       }
      }
     },
@@ -506,22 +1321,96 @@
      "color": {
       "mode": "palette-classic"
      },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#5794F2",
+        "value": null
+       }
+      ]
+     },
      "custom": {
       "fillOpacity": 85,
       "lineWidth": 0,
-      "axisLabel": "seconds"
+      "gradientMode": "none",
+      "axisLabel": "seconds from power-on",
+      "axisPlacement": "auto",
+      "axisSoftMin": 0
      }
     },
-    "overrides": []
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Dongle starts, calls phone"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#5794F2"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Phone joins hotspot"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#B877D9"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Car switches to Android Auto"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "green"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Drive"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "none"
+       }
+      ]
+     }
+    ]
    },
    "options": {
     "xField": "Drive",
     "orientation": "vertical",
-    "groupWidth": 0.75,
-    "barWidth": 0.9,
-    "showValue": "auto",
-    "stacking": "none",
+    "groupWidth": 0.7,
+    "barWidth": 0.85,
+    "barRadius": 0.05,
+    "showValue": "never",
+    "stacking": "normal",
     "xTickLabelRotation": 0,
+    "xTickLabelSpacing": 0,
+    "colorByField": null,
+    "fullHighlight": false,
     "legend": {
      "displayMode": "list",
      "placement": "bottom",
@@ -531,21 +1420,22 @@
      "mode": "multi",
      "sort": "none"
     }
-   }
+   },
+   "id": 18
   },
   {
-   "type": "table",
-   "title": "Drives",
-   "description": "One row per flight-log slot: session+60s = a drive, start+90s = no Android Auto within 90 s.",
+   "type": "bargauge",
+   "title": "Latest drive, step by step",
+   "description": "Seconds from power-on to each step of the latest drive's start.",
    "datasource": {
     "type": "prometheus",
     "uid": "${ds}"
    },
    "gridPos": {
-    "h": 10,
-    "w": 24,
-    "x": 0,
-    "y": 13
+    "h": 9,
+    "w": 8,
+    "x": 16,
+    "y": 11
    },
    "targets": [
     {
@@ -554,7 +1444,147 @@
       "type": "prometheus",
       "uid": "${ds}"
      },
-     "expr": "max by (log_seq, why) (max_over_time(u2ac_flightlog_info[$__range]))",
+     "instant": true,
+     "range": false,
+     "legendFormat": "Dongle calls the phone",
+     "expr": "max(u2ac_aa_event_seconds{event=\"bt_try\"} and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_aa_event_seconds{event=\"bt_try\"}))))"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "instant": true,
+     "range": false,
+     "legendFormat": "Phone answers (Bluetooth)",
+     "expr": "max(u2ac_aa_event_seconds{event=\"bt_connected\"} and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_aa_event_seconds{event=\"bt_connected\"}))))"
+    },
+    {
+     "refId": "C",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "instant": true,
+     "range": false,
+     "legendFormat": "Phone on the hotspot",
+     "expr": "max(u2ac_aa_event_seconds{event=\"wifi_joined\"} and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_aa_event_seconds{event=\"wifi_joined\"}))))"
+    },
+    {
+     "refId": "D",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "instant": true,
+     "range": false,
+     "legendFormat": "Phone connects to the relay",
+     "expr": "max(u2ac_aa_event_seconds{event=\"phone_tcp\"} and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_aa_event_seconds{event=\"phone_tcp\"}))))"
+    },
+    {
+     "refId": "E",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "instant": true,
+     "range": false,
+     "legendFormat": "Car asks for Android Auto",
+     "expr": "max(u2ac_aa_event_seconds{event=\"car_aoa_start\"} and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_aa_event_seconds{event=\"car_aoa_start\"}))))"
+    },
+    {
+     "refId": "F",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "instant": true,
+     "range": false,
+     "legendFormat": "Android Auto on screen",
+     "expr": "max(u2ac_aa_event_seconds{event=\"proxying\"} and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_aa_event_seconds{event=\"proxying\"}))))"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "decimals": 1,
+     "min": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "#EAB839",
+        "value": 26
+       },
+       {
+        "color": "red",
+        "value": 35
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "orientation": "horizontal",
+    "displayMode": "gradient",
+    "showUnfilled": true,
+    "valueMode": "color",
+    "namePlacement": "top",
+    "sizing": "auto",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 19
+  },
+  {
+   "type": "row",
+   "title": "Drives",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 20
+   },
+   "panels": [],
+   "id": 20
+  },
+  {
+   "type": "table",
+   "title": "All drives",
+   "description": "One row per flight-log entry, newest first. Dashes: not recorded by that firmware or not known (start times exist only for drives that began at home).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 10,
+    "w": 24,
+    "x": 0,
+    "y": 21
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "(max by (log_seq, why) (max_over_time(u2ac_flightlog_info[$__range]))) or on(log_seq) (max by (log_seq) (max_over_time(u2ac_flightlog_seq[$__range])) * NaN)",
      "instant": true,
      "range": false,
      "format": "table"
@@ -565,7 +1595,7 @@
       "type": "prometheus",
       "uid": "${ds}"
      },
-     "expr": "max by (log_seq) (max_over_time(u2ac_aa_event_seconds{event=\"proxying\"}[$__range]))",
+     "expr": "(max by (log_seq) (max_over_time(u2ac_drive_start_timestamp_seconds[$__range])) * 1000) or on(log_seq) (max by (log_seq) (max_over_time(u2ac_flightlog_seq[$__range])) * NaN)",
      "instant": true,
      "range": false,
      "format": "table"
@@ -576,7 +1606,7 @@
       "type": "prometheus",
       "uid": "${ds}"
      },
-     "expr": "max by (log_seq) (max_over_time(u2ac_aa_event_seconds{event=\"wifi_joined\"}[$__range]))",
+     "expr": "(max by (log_seq) (max_over_time(u2ac_drive_seconds[$__range]))) or on(log_seq) (max by (log_seq) (max_over_time(u2ac_flightlog_seq[$__range])) * NaN)",
      "instant": true,
      "range": false,
      "format": "table"
@@ -587,7 +1617,7 @@
       "type": "prometheus",
       "uid": "${ds}"
      },
-     "expr": "max by (log_seq) (max_over_time(u2ac_aa_event_seconds{event=\"bt_try\"}[$__range]))",
+     "expr": "(max by (log_seq) (max_over_time(u2ac_aa_event_seconds{event=\"proxying\"}[$__range]))) or on(log_seq) (max by (log_seq) (max_over_time(u2ac_flightlog_seq[$__range])) * NaN)",
      "instant": true,
      "range": false,
      "format": "table"
@@ -598,7 +1628,7 @@
       "type": "prometheus",
       "uid": "${ds}"
      },
-     "expr": "max by (log_seq) (max_over_time(u2ac_wifi_station_connects_total[$__range]))",
+     "expr": "(max by (log_seq) (max_over_time(u2ac_aa_event_seconds{event=\"wifi_joined\"}[$__range]))) or on(log_seq) (max by (log_seq) (max_over_time(u2ac_flightlog_seq[$__range])) * NaN)",
      "instant": true,
      "range": false,
      "format": "table"
@@ -609,7 +1639,7 @@
       "type": "prometheus",
       "uid": "${ds}"
      },
-     "expr": "max by (log_seq) (max_over_time(u2ac_wifi_station_tx_bitrate_bps{role=\"aa_phone\"}[$__range]))",
+     "expr": "(max by (log_seq) (max_over_time(u2ac_drive_drops[$__range]))) or on(log_seq) (max by (log_seq) (max_over_time(u2ac_flightlog_seq[$__range])) * NaN)",
      "instant": true,
      "range": false,
      "format": "table"
@@ -620,7 +1650,7 @@
       "type": "prometheus",
       "uid": "${ds}"
      },
-     "expr": "max by (log_seq) (max_over_time(u2ac_soc_temperature_celsius[$__range]))",
+     "expr": "(max by (log_seq) (max_over_time(u2ac_drive_temperature_max_celsius[$__range]))) or on(log_seq) (max by (log_seq) (max_over_time(u2ac_flightlog_seq[$__range])) * NaN)",
      "instant": true,
      "range": false,
      "format": "table"
@@ -631,7 +1661,7 @@
       "type": "prometheus",
       "uid": "${ds}"
      },
-     "expr": "max by (log_seq) (max_over_time(u2ac_hfp_guard_connected[$__range]))",
+     "expr": "(max by (log_seq) (max_over_time(u2ac_drive_signal_min_dbm[$__range]))) or on(log_seq) (max by (log_seq) (max_over_time(u2ac_flightlog_seq[$__range])) * NaN)",
      "instant": true,
      "range": false,
      "format": "table"
@@ -642,7 +1672,7 @@
       "type": "prometheus",
       "uid": "${ds}"
      },
-     "expr": "sum by (log_seq) (max_over_time(u2ac_radio_repairs_total[$__range]))",
+     "expr": "(max by (log_seq) (max_over_time(u2ac_drive_rx_bytes[$__range]) + max_over_time(u2ac_drive_tx_bytes[$__range]))) or on(log_seq) (max by (log_seq) (max_over_time(u2ac_flightlog_seq[$__range])) * NaN)",
      "instant": true,
      "range": false,
      "format": "table"
@@ -653,7 +1683,7 @@
       "type": "prometheus",
       "uid": "${ds}"
      },
-     "expr": "max by (log_seq) (max_over_time(u2ac_aa_proxy_restarts_total[$__range]))",
+     "expr": "(max by (log_seq) (max_over_time(u2ac_drive_hotspot_devices[$__range]))) or on(log_seq) (max by (log_seq) (max_over_time(u2ac_flightlog_seq[$__range])) * NaN)",
      "instant": true,
      "range": false,
      "format": "table"
@@ -664,7 +1694,29 @@
       "type": "prometheus",
       "uid": "${ds}"
      },
-     "expr": "max by (log_seq) (max_over_time(u2ac_home_upload_seconds[$__range]))",
+     "expr": "(max by (log_seq) (max_over_time(u2ac_drive_radio_repairs[$__range]) + max_over_time(u2ac_drive_relay_restarts[$__range]))) or on(log_seq) (max by (log_seq) (max_over_time(u2ac_flightlog_seq[$__range])) * NaN)",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    },
+    {
+     "refId": "L",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "(max by (log_seq) ((max by (log_seq) (max_over_time(u2ac_last_reset{cause=\"power\"}[$__range])) * 1) or (max by (log_seq) (max_over_time(u2ac_last_reset{cause=\"software\"}[$__range])) * 2) or (max by (log_seq) (max_over_time(u2ac_last_reset{cause=\"watchdog\"}[$__range])) * 3) or (max by (log_seq) (max_over_time(u2ac_last_reset{cause=\"unknown\"}[$__range])) * 4))) or on(log_seq) (max by (log_seq) (max_over_time(u2ac_flightlog_seq[$__range])) * NaN)",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    },
+    {
+     "refId": "M",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "(max by (log_seq) (max_over_time(u2ac_home_upload_seconds[$__range]))) or on(log_seq) (max by (log_seq) (max_over_time(u2ac_flightlog_seq[$__range])) * NaN)",
      "instant": true,
      "range": false,
      "format": "table"
@@ -672,8 +1724,19 @@
    ],
    "transformations": [
     {
-     "id": "merge",
-     "options": {}
+     "id": "joinByField",
+     "options": {
+      "byField": "log_seq",
+      "mode": "outer"
+     }
+    },
+    {
+     "id": "filterFieldsByName",
+     "options": {
+      "include": {
+       "pattern": "^(?!Time).*$"
+      }
+     }
     },
     {
      "id": "organize",
@@ -685,20 +1748,21 @@
       "renameByName": {
        "log_seq": "Drive",
        "why": "Log",
-       "Value #B": "Android Auto (s)",
-       "Value #C": "Phone on hotspot (s)",
-       "Value #D": "Phone called (s)",
-       "Value #E": "Hotspot joins",
-       "Value #F": "Link to phone",
-       "Value #G": "Chip",
-       "Value #H": "Mic guard up",
-       "Value #I": "Radio repairs",
-       "Value #J": "Relay restarts",
-       "Value #K": "Upload (s)"
+       "Value #B": "Started",
+       "Value #C": "Length",
+       "Value #D": "Android Auto",
+       "Value #E": "On hotspot",
+       "Value #F": "Drops",
+       "Value #G": "Peak temp",
+       "Value #H": "Worst signal",
+       "Value #I": "Data",
+       "Value #J": "Devices",
+       "Value #K": "Repairs",
+       "Value #L": "Started by",
+       "Value #M": "Upload"
       },
       "indexByName": {
        "log_seq": 0,
-       "why": 1,
        "Value #B": 2,
        "Value #C": 3,
        "Value #D": 4,
@@ -708,7 +1772,10 @@
        "Value #H": 8,
        "Value #I": 9,
        "Value #J": 10,
-       "Value #K": 11
+       "Value #K": 11,
+       "Value #L": 12,
+       "Value #M": 13,
+       "why": 14
       }
      }
     },
@@ -737,18 +1804,66 @@
    ],
    "fieldConfig": {
     "defaults": {
+     "noValue": "\u2013",
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ],
      "custom": {
       "align": "auto",
       "cellOptions": {
        "type": "auto"
-      }
+      },
+      "inspect": false,
+      "minWidth": 70
      }
     },
     "overrides": [
      {
       "matcher": {
        "id": "byName",
-       "options": "Android Auto (s)"
+       "options": "Started"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "dateTimeAsLocal"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Length"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "dtdurations"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Android Auto"
       },
       "properties": [
        {
@@ -758,13 +1873,45 @@
        {
         "id": "decimals",
         "value": 1
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "green",
+           "value": null
+          },
+          {
+           "color": "#EAB839",
+           "value": 26
+          },
+          {
+           "color": "red",
+           "value": 35
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
        }
       ]
      },
      {
       "matcher": {
        "id": "byName",
-       "options": "Phone on hotspot (s)"
+       "options": "On hotspot"
       },
       "properties": [
        {
@@ -774,29 +1921,45 @@
        {
         "id": "decimals",
         "value": 1
-       }
-      ]
-     },
-     {
-      "matcher": {
-       "id": "byName",
-       "options": "Phone called (s)"
-      },
-      "properties": [
-       {
-        "id": "unit",
-        "value": "s"
        },
        {
-        "id": "decimals",
-        "value": 1
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "green",
+           "value": null
+          },
+          {
+           "color": "#EAB839",
+           "value": 18
+          },
+          {
+           "color": "red",
+           "value": 25
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
        }
       ]
      },
      {
       "matcher": {
        "id": "byName",
-       "options": "Hotspot joins"
+       "options": "Drops"
       },
       "properties": [
        {
@@ -806,29 +1969,41 @@
        {
         "id": "decimals",
         "value": 0
-       }
-      ]
-     },
-     {
-      "matcher": {
-       "id": "byName",
-       "options": "Link to phone"
-      },
-      "properties": [
-       {
-        "id": "unit",
-        "value": "bps"
        },
        {
-        "id": "decimals",
-        "value": 0
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "green",
+           "value": null
+          },
+          {
+           "color": "red",
+           "value": 1
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
        }
       ]
      },
      {
       "matcher": {
        "id": "byName",
-       "options": "Chip"
+       "options": "Peak temp"
       },
       "properties": [
        {
@@ -838,13 +2013,197 @@
        {
         "id": "decimals",
         "value": 0
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "green",
+           "value": null
+          },
+          {
+           "color": "#EAB839",
+           "value": 70
+          },
+          {
+           "color": "red",
+           "value": 80
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
        }
       ]
      },
      {
       "matcher": {
        "id": "byName",
-       "options": "Mic guard up"
+       "options": "Worst signal"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "dBm"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "red",
+           "value": null
+          },
+          {
+           "color": "#EAB839",
+           "value": -80
+          },
+          {
+           "color": "green",
+           "value": -70
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Data"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "decbytes"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Devices"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "none"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "green",
+           "value": null
+          },
+          {
+           "color": "red",
+           "value": 2
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Repairs"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "none"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "green",
+           "value": null
+          },
+          {
+           "color": "#EAB839",
+           "value": 1
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Started by"
       },
       "properties": [
        {
@@ -860,39 +2219,7 @@
      {
       "matcher": {
        "id": "byName",
-       "options": "Radio repairs"
-      },
-      "properties": [
-       {
-        "id": "unit",
-        "value": "none"
-       },
-       {
-        "id": "decimals",
-        "value": 0
-       }
-      ]
-     },
-     {
-      "matcher": {
-       "id": "byName",
-       "options": "Relay restarts"
-      },
-      "properties": [
-       {
-        "id": "unit",
-        "value": "none"
-       },
-       {
-        "id": "decimals",
-        "value": 0
-       }
-      ]
-     },
-     {
-      "matcher": {
-       "id": "byName",
-       "options": "Upload (s)"
+       "options": "Upload"
       },
       "properties": [
        {
@@ -902,6 +2229,122 @@
        {
         "id": "decimals",
         "value": 1
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Log"
+      },
+      "properties": [
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "session+60s": {
+            "text": "drive",
+            "index": 0
+           },
+           "start+90s": {
+            "text": "no Android Auto in 90 s",
+            "color": "red",
+            "index": 1
+           },
+           "session-end": {
+            "text": "session ended",
+            "index": 2
+           },
+           "periodic": {
+            "text": "update",
+            "index": 3
+           },
+           "sleep": {
+            "text": "car-off sleep",
+            "index": 4
+           },
+           "bench-test": {
+            "text": "bench test",
+            "index": 5
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Started by"
+      },
+      "properties": [
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "special",
+          "options": {
+           "match": "null+nan",
+           "result": {
+            "text": "\u2013",
+            "color": "text",
+            "index": 99
+           }
+          }
+         },
+         {
+          "type": "value",
+          "options": {
+           "1": {
+            "text": "power-on",
+            "color": "text",
+            "index": 0
+           },
+           "2": {
+            "text": "reboot",
+            "color": "#EAB839",
+            "index": 1
+           },
+           "3": {
+            "text": "watchdog",
+            "color": "red",
+            "index": 2
+           },
+           "4": {
+            "text": "unknown",
+            "color": "text",
+            "index": 3
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Drive"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 70
        }
       ]
      }
@@ -912,8 +2355,1097 @@
     "cellHeight": "sm",
     "footer": {
      "show": false
+    },
+    "sortBy": [
+     {
+      "displayName": "Drive",
+      "desc": true
+     }
+    ]
+   },
+   "id": 21
+  },
+  {
+   "type": "row",
+   "title": "Per drive",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 31
+   },
+   "panels": [],
+   "id": 22
+  },
+  {
+   "type": "barchart",
+   "title": "Data relayed",
+   "description": "Wi-Fi data between phone and dongle per drive (mostly the video to the car).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 6,
+    "x": 0,
+    "y": 32
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max by (log_seq) (max_over_time(u2ac_drive_rx_bytes[$__range]) + max_over_time(u2ac_drive_tx_bytes[$__range]))",
+     "instant": true,
+     "range": false,
+     "format": "table"
     }
-   }
+   ],
+   "transformations": [
+    {
+     "id": "merge",
+     "options": {}
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true
+      },
+      "renameByName": {
+       "log_seq": "Drive",
+       "Value": "Data relayed"
+      }
+     }
+    },
+    {
+     "id": "convertFieldType",
+     "options": {
+      "conversions": [
+       {
+        "targetField": "Drive",
+        "destinationType": "number"
+       }
+      ]
+     }
+    },
+    {
+     "id": "sortBy",
+     "options": {
+      "sort": [
+       {
+        "field": "Drive",
+        "desc": false
+       }
+      ]
+     }
+    },
+    {
+     "id": "convertFieldType",
+     "options": {
+      "conversions": [
+       {
+        "targetField": "Drive",
+        "destinationType": "string"
+       }
+      ]
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "decbytes",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#5794F2",
+        "value": null
+       }
+      ]
+     },
+     "custom": {
+      "fillOpacity": 85,
+      "lineWidth": 0,
+      "gradientMode": "none",
+      "axisLabel": "",
+      "axisPlacement": "auto",
+      "axisSoftMin": 0
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Drive"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "none"
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "xField": "Drive",
+    "orientation": "vertical",
+    "groupWidth": 0.7,
+    "barWidth": 0.85,
+    "barRadius": 0.05,
+    "showValue": "never",
+    "stacking": "none",
+    "xTickLabelRotation": 0,
+    "xTickLabelSpacing": 0,
+    "colorByField": null,
+    "fullHighlight": false,
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": false
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "id": 23
+  },
+  {
+   "type": "barchart",
+   "title": "Peak temperature",
+   "description": "Highest chip temperature per drive.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 6,
+    "x": 6,
+    "y": 32
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max by (log_seq) (max_over_time(u2ac_drive_temperature_max_celsius[$__range]))",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "merge",
+     "options": {}
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true
+      },
+      "renameByName": {
+       "log_seq": "Drive",
+       "Value": "Peak temperature"
+      }
+     }
+    },
+    {
+     "id": "convertFieldType",
+     "options": {
+      "conversions": [
+       {
+        "targetField": "Drive",
+        "destinationType": "number"
+       }
+      ]
+     }
+    },
+    {
+     "id": "sortBy",
+     "options": {
+      "sort": [
+       {
+        "field": "Drive",
+        "desc": false
+       }
+      ]
+     }
+    },
+    {
+     "id": "convertFieldType",
+     "options": {
+      "conversions": [
+       {
+        "targetField": "Drive",
+        "destinationType": "string"
+       }
+      ]
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "celsius",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "#EAB839",
+        "value": 70
+       },
+       {
+        "color": "red",
+        "value": 80
+       }
+      ]
+     },
+     "custom": {
+      "fillOpacity": 85,
+      "lineWidth": 0,
+      "gradientMode": "none",
+      "axisLabel": "",
+      "axisPlacement": "auto",
+      "axisSoftMin": 0
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Drive"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "none"
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "xField": "Drive",
+    "orientation": "vertical",
+    "groupWidth": 0.7,
+    "barWidth": 0.85,
+    "barRadius": 0.05,
+    "showValue": "never",
+    "stacking": "none",
+    "xTickLabelRotation": 0,
+    "xTickLabelSpacing": 0,
+    "colorByField": null,
+    "fullHighlight": false,
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": false
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "id": 24
+  },
+  {
+   "type": "barchart",
+   "title": "Worst phone signal",
+   "description": "Weakest Wi-Fi signal from the phone per drive.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 6,
+    "x": 12,
+    "y": 32
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max by (log_seq) (max_over_time(u2ac_drive_signal_min_dbm[$__range]))",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "merge",
+     "options": {}
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true
+      },
+      "renameByName": {
+       "log_seq": "Drive",
+       "Value": "Worst signal"
+      }
+     }
+    },
+    {
+     "id": "convertFieldType",
+     "options": {
+      "conversions": [
+       {
+        "targetField": "Drive",
+        "destinationType": "number"
+       }
+      ]
+     }
+    },
+    {
+     "id": "sortBy",
+     "options": {
+      "sort": [
+       {
+        "field": "Drive",
+        "desc": false
+       }
+      ]
+     }
+    },
+    {
+     "id": "convertFieldType",
+     "options": {
+      "conversions": [
+       {
+        "targetField": "Drive",
+        "destinationType": "string"
+       }
+      ]
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "dBm",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "#EAB839",
+        "value": -80
+       },
+       {
+        "color": "green",
+        "value": -70
+       }
+      ]
+     },
+     "custom": {
+      "fillOpacity": 85,
+      "lineWidth": 0,
+      "gradientMode": "none",
+      "axisLabel": "",
+      "axisPlacement": "auto",
+      "axisSoftMin": null
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Drive"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "none"
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "xField": "Drive",
+    "orientation": "vertical",
+    "groupWidth": 0.7,
+    "barWidth": 0.85,
+    "barRadius": 0.05,
+    "showValue": "never",
+    "stacking": "none",
+    "xTickLabelRotation": 0,
+    "xTickLabelSpacing": 0,
+    "colorByField": null,
+    "fullHighlight": false,
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": false
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "id": 25
+  },
+  {
+   "type": "barchart",
+   "title": "Drive length",
+   "description": "How long the dongle was powered per drive.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 6,
+    "x": 18,
+    "y": 32
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max by (log_seq) (max_over_time(u2ac_drive_seconds[$__range]))",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "merge",
+     "options": {}
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true
+      },
+      "renameByName": {
+       "log_seq": "Drive",
+       "Value": "Drive length"
+      }
+     }
+    },
+    {
+     "id": "convertFieldType",
+     "options": {
+      "conversions": [
+       {
+        "targetField": "Drive",
+        "destinationType": "number"
+       }
+      ]
+     }
+    },
+    {
+     "id": "sortBy",
+     "options": {
+      "sort": [
+       {
+        "field": "Drive",
+        "desc": false
+       }
+      ]
+     }
+    },
+    {
+     "id": "convertFieldType",
+     "options": {
+      "conversions": [
+       {
+        "targetField": "Drive",
+        "destinationType": "string"
+       }
+      ]
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "dtdurations",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#5794F2",
+        "value": null
+       }
+      ]
+     },
+     "custom": {
+      "fillOpacity": 85,
+      "lineWidth": 0,
+      "gradientMode": "none",
+      "axisLabel": "",
+      "axisPlacement": "auto",
+      "axisSoftMin": 0
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Drive"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "none"
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "xField": "Drive",
+    "orientation": "vertical",
+    "groupWidth": 0.7,
+    "barWidth": 0.85,
+    "barRadius": 0.05,
+    "showValue": "never",
+    "stacking": "none",
+    "xTickLabelRotation": 0,
+    "xTickLabelSpacing": 0,
+    "colorByField": null,
+    "fullHighlight": false,
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": false
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "id": 26
+  },
+  {
+   "type": "row",
+   "title": "Home upload",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 39
+   },
+   "panels": [],
+   "id": 27
+  },
+  {
+   "type": "stat",
+   "title": "Upload time",
+   "description": "How long the latest upload took (it starts before the hotspot; the limit is 4 s at a car start).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 0,
+    "y": 40
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max(u2ac_home_upload_seconds and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_home_upload_seconds))))",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "decimals": 1,
+     "noValue": "\u2013",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "#EAB839",
+        "value": 3
+       },
+       {
+        "color": "red",
+        "value": 4
+       }
+      ]
+     },
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 28
+  },
+  {
+   "type": "stat",
+   "title": "Home Wi-Fi signal",
+   "description": "Signal of the home network where the car was parked, at the latest upload.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 4,
+    "y": 40
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max(u2ac_home_upload_signal_dbm and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_home_upload_signal_dbm))))",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "dBm",
+     "decimals": 0,
+     "noValue": "\u2013",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "#EAB839",
+        "value": -82
+       },
+       {
+        "color": "green",
+        "value": -75
+       }
+      ]
+     },
+     "mappings": [
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 29
+  },
+  {
+   "type": "stat",
+   "title": "Old lease used",
+   "description": "1 when DHCP did not answer in time and the dongle used its last address.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
+    "y": 40
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max(u2ac_home_upload_lease_reused and on(log_seq) (u2ac_flightlog_seq == scalar(max(u2ac_flightlog_seq and on(log_seq) u2ac_home_upload_lease_reused))))",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "noValue": "\u2013",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "#EAB839",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "No",
+         "index": 0
+        },
+        "1": {
+         "text": "Yes",
+         "index": 1
+        }
+       }
+      },
+      {
+       "type": "special",
+       "options": {
+        "match": "null+nan",
+        "result": {
+         "text": "\u2013",
+         "color": "text",
+         "index": 99
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 30
+  },
+  {
+   "type": "barchart",
+   "title": "Upload time per drive",
+   "description": "Per drive, the time each step of its upload took: find the network, join it, get an address (the rest is sending).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${ds}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 40
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max by (log_seq) (max_over_time(u2ac_home_upload_phase_seconds{phase=\"scan\"}[$__range]))",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max by (log_seq) (max_over_time(u2ac_home_upload_phase_seconds{phase=\"join\"}[$__range]))",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    },
+    {
+     "refId": "C",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${ds}"
+     },
+     "expr": "max by (log_seq) (max_over_time(u2ac_home_upload_phase_seconds{phase=\"address\"}[$__range]))",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "merge",
+     "options": {}
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true
+      },
+      "renameByName": {
+       "log_seq": "Drive",
+       "Value #A": "Find network",
+       "Value #B": "Join",
+       "Value #C": "Get address"
+      }
+     }
+    },
+    {
+     "id": "convertFieldType",
+     "options": {
+      "conversions": [
+       {
+        "targetField": "Drive",
+        "destinationType": "number"
+       }
+      ]
+     }
+    },
+    {
+     "id": "sortBy",
+     "options": {
+      "sort": [
+       {
+        "field": "Drive",
+        "desc": false
+       }
+      ]
+     }
+    },
+    {
+     "id": "convertFieldType",
+     "options": {
+      "conversions": [
+       {
+        "targetField": "Drive",
+        "destinationType": "string"
+       }
+      ]
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "decimals": 1,
+     "color": {
+      "mode": "palette-classic"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#5794F2",
+        "value": null
+       }
+      ]
+     },
+     "custom": {
+      "fillOpacity": 85,
+      "lineWidth": 0,
+      "gradientMode": "none",
+      "axisLabel": "",
+      "axisPlacement": "auto",
+      "axisSoftMin": 0
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Find network"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#5794F2"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Join"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#B877D9"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Get address"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "green"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Drive"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "none"
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "xField": "Drive",
+    "orientation": "vertical",
+    "groupWidth": 0.7,
+    "barWidth": 0.85,
+    "barRadius": 0.05,
+    "showValue": "never",
+    "stacking": "normal",
+    "xTickLabelRotation": 0,
+    "xTickLabelSpacing": 0,
+    "colorByField": null,
+    "fullHighlight": false,
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "id": 31
   }
  ]
 }

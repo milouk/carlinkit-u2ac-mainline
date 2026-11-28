@@ -196,6 +196,14 @@ for sc in car carncm computer dev; do
     && echo "$out" | grep -q '^metric: u2ac_radio_repairs_total{what="hostapd"} 2' \
     && { [ $carish = 0 ] || echo "$out" | grep -q '^metric: u2ac_aa_proxy_rss_bytes [0-9]'; } \
     && ok "health exporter: $sc" || { bad "health exporter: $sc"; echo "$out" | grep -- '--- metrics\|^metric:\|^BAD\|^DUP\|^OUTSIDE'; }
+  # what started this boot (WDOG1 reset source, devmem stub = power-on), and the drive records in car modes
+  echo "$out" | grep -q -- '--- reset: power' && ok "reset cause recorded: $sc" || bad "reset cause: $sc"
+  if [ $carish = 1 ]; then
+    echo "$out" | grep -q -- '--- drive records: [2-9][0-9]* last=\[D1 up=[0-9]* t=x ls=[0-9]* ses=[0-9]* err=[0-9]* ring=[0-9]* rst=[0-9]* rep=[0-9]* tmax=x smin=-45 sta=1 ' \
+      && ok "drive records in the slot: $sc" || { bad "drive records: $sc"; echo "$out" | grep -- '--- drive'; }
+  else
+    echo "$out" | grep -q -- '--- drive records: 0 ' && ok "no drive records: $sc" || { bad "drive records in $sc"; echo "$out" | grep -- '--- drive'; }
+  fi
   # the relay starts early (before BT is up) only when the boot's probe saw a car
   if [ $sc = car ]; then
     echo "$out" | awk '/aa-proxy-rs started early/ { e = NR } /BT up/ { b = NR } END { exit !(e && b && e < b) }' \
@@ -222,7 +230,8 @@ out=$(run_arm --privileged -v "$W:/o:ro" -e SCEN=carhome "$TAG" /bin/sh /o/dry.s
 echo "$out" | grep -q -- '--- home log: sent 1 log(s) up to seq 7 to 127.0.0.1:19091' \
   && echo "$out" | grep -q -- '--- home order: before-ap wpa-then-hostapd' \
   && echo "$out" | grep -q -- '--- home server: POST /metrics/job/u2ac/log_seq/7 [0-9]*;$' \
-  && echo "$out" | grep -q -- '--- home mark: seq=8 .* home=7$' \
+  && echo "$out" | grep -q -- '--- home mark: seq=8 .* home=7 t=17958780[0-9][0-9]$' \
+  && echo "$out" | grep -q -- '--- drive records: [2-9][0-9]* last=\[D1 up=[0-9]* t=17958780[0-9][0-9] ' \
   && echo "$out" | grep -q 'aa-proxy-rs started early' && echo "$out" | grep -q 'AP up' && ! echo "$out" | grep -q 'did not' \
   && ok "home upload at boot: before the hotspot, its mark in the next slot" \
   || { bad "home upload at boot"; echo "$out" | grep -- '--- home\|home upload\|AP up\|did not'; }

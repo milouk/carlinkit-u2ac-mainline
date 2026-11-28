@@ -50,6 +50,8 @@ mk /usr/sbin/udhcpd 'echo "udhcpd $*" >> /run/stub.calls'
 mk /usr/sbin/httpd 'echo "httpd $*" >> /run/stub.calls; sleep 600 &'
 mk /usr/sbin/dropbear 'echo "dropbear $*" >> /run/stub.calls'
 mk /usr/sbin/persist 'echo "persist $*" >> /run/stub.calls'
+for b in /sbin/devmem /usr/sbin/devmem /bin/devmem; do [ -e $b ] && rm -f $b; done
+mk /sbin/devmem 'echo "devmem $*" >> /run/stub.calls; echo 0x0010'
 mk /usr/sbin/ip 'case "$*" in "-4 addr show usb0") echo "    inet 192.168.50.2/24 scope global usb0";; *) echo "ip $*" >> /run/stub.calls;; esac; exit 0'
 mk /usr/sbin/ping 'echo "ping $*" >> /run/stub.calls; [ -e /run/computer ]'
 rm -f /usr/sbin/arping; mk /usr/sbin/arping 'echo "arping $*" >> /run/stub.calls; [ -e /run/computer ]'
@@ -82,7 +84,7 @@ if [ "$SCEN" = carhome ]; then
     : > /run/home-here; : > /run/pgw.log
     mk /fake/pgw.sh 'read -r m p v; n=0; cr=$(printf "\r")
 while read -r l; do l=${l%"$cr"}; [ -z "$l" ] && break; case $l in [Cc]ontent-[Ll]ength:*) n=${l#*: };; esac; done
-[ "$n" -gt 0 ] && head -c "$n" > /dev/null; echo "$m ${p#/pg} $n" >> /run/pgw.log; printf "HTTP/1.0 200 OK\r\n\r\n"'
+[ "$n" -gt 0 ] && head -c "$n" > /dev/null; echo "$m ${p#/pg} $n" >> /run/pgw.log; printf "HTTP/1.0 200 OK\r\nDate: Sat, 28 Nov 2026 15:00:00 GMT\r\n\r\n"'
     nc -lk -s 127.0.0.1 -p 19091 -e /fake/pgw.sh &
     { echo "=== metrics"; printf '# HELP u2ac_up up\n# TYPE u2ac_up gauge\nu2ac_up 1\n# TYPE u2ac_aa_event_seconds gauge\nu2ac_aa_event_seconds{event="proxying"} 23.3\n'
       echo "=== usb:configured"; } | gzip -c > /tmp/g
@@ -127,6 +129,11 @@ echo "--- known_devices: $(tr '\n' ' ' < /run/aa-etc/known_devices 2> /dev/null)
 case $SCEN in car | carncm) n=0; until [ -n "$(u2ac-aa flightlog 2> /dev/null | head -n 1)" ] || [ $n -ge 30 ]; do sleep 0.5; n=$((n + 1)); done ;; esac
 echo "--- flightlog list: $(u2ac-aa flightlog 2>&1 | head -n 1)"
 echo "--- flightlog last: $(u2ac-aa flightlog last 2>&1 | grep -c '^=== ')"
+# drive records (dr_rec) in the second half of the boot's first slot: one per 12 ticks after the slot (car modes)
+case $SCEN in car | carncm | carhome)
+    n=0; until [ "$(u2ac-aa flightlog last 2> /dev/null | grep -c '^D1 ')" -ge 2 ] || [ $n -ge 40 ]; do sleep 0.5; n=$((n + 1)); done ;; esac
+echo "--- drive records: $(u2ac-aa flightlog last 2> /dev/null | grep -c '^D1 ') last=[$(u2ac-aa flightlog last 2> /dev/null | grep '^D1 ' | tail -n 1)]"
+echo "--- reset: $(cat /run/u2ac-reset 2> /dev/null)"
 if [ "$SCEN" = carhome ]; then
     # sent at boot before the hotspot came up; the slot this boot writes (seq 8, 90 s in) carries the mark home=7
     n=0; until u2ac-aa flightlog 2> /dev/null | grep -q ' seq=8 ' || [ $n -ge 30 ]; do sleep 0.5; n=$((n + 1)); done

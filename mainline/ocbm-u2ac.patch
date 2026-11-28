@@ -203171,10 +203171,10 @@ index 0000000..8114b82
 \ No newline at end of file
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
 new file mode 100755
-index 0000000..e6fcfec
+index 0000000..a6fea8f
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-aa
-@@ -0,0 +1,937 @@
+@@ -0,0 +1,1001 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# u2ac-aa start|stop|status|persist|aa-now|watch|home-now [all]|dev on|off|aa|flightlog [last|SEQ]  (Carlinkit U2AC, milouk 2026-11-26)
@@ -203845,13 +203845,15 @@ index 0000000..e6fcfec
 +    _b=786432
 +    while :; do
 +        fl_bundle $_b | gzip -c > /run/fl.gz
-+        [ "$(wc -c < /run/fl.gz)" -le $((FL_SLOT - FL_HDR)) ] && break
++        [ "$(wc -c < /run/fl.gz)" -le $((FL_SLOT / 2 - FL_HDR)) ] && break   # 2nd half: drive records
 +        [ $_b -le 16384 ] && { rm -f /run/fl.gz; return 1; }
 +        _b=$((_b / 2))
 +    done
 +    _l="U2AC-FLIGHTLOG 1 seq=$FL_SEQ up=$(cut -d. -f1 /proc/uptime) why=$1 bytes=$(wc -c < /run/fl.gz)"
 +    # home=SEQ: the last slot this boot's home upload sent (u2ac-home): the mark reaches flash here, in a drive
 +    _hs=$(cat /run/u2ac-home/sent 2> /dev/null); case $_hs in '' | *[!0-9]*) ;; *) _l="$_l home=$_hs" ;; esac
++    # t=EPOCH: wall-clock time of this write, when this boot's home upload learned it (u2ac-home: /run/u2ac-clock)
++    _ck=$(cat /run/u2ac-clock 2> /dev/null); case $_ck in '' | *[!0-9]*) ;; *) _l="$_l t=$(($(cut -d. -f1 /proc/uptime) + _ck))" ;; esac
 +    { echo "$_l"; head -c $((FL_HDR - ${#_l} - 1)) /dev/zero; cat /run/fl.gz; } > /run/fl.slot
 +    rm -f /run/fl.gz
 +    # never outside [area, end of the MTD): the squashfs lies below FL_OFF (fl_dev checked its bytes_used)
@@ -203861,8 +203863,56 @@ index 0000000..e6fcfec
 +    if { fl_erased "$_off" || $FL_ERASE "$FL_D" "$_off" 2; } \
 +        && dd if=/run/fl.slot of="$FL_D" bs=512 seek=$((_off / 512)) conv=notrunc 2> /dev/null
 +    then FL_N=$((${FL_N:-0} + 1)); say "flight log: seq $FL_SEQ ($1) recorded"
++        # this boot's drive records go into the (erased) second half of its first slot (dr_rec)
++        [ -n "${DR_OFF:-}" ] || { DR_OFF=$((_off + FL_SLOT / 2)); DR_N=0; }
 +    else say "flight log: write of seq $FL_SEQ FAILED"; fi
 +    rm -f /run/fl.slot
++}
++# dr_rec: one drive record. The drive's state so far as one 256-byte line, every minute (every 5 min after two
++# hours), in the second half of this boot's first slot: fl_write erased it with the slot and fills only the first
++# half, and programming erased NOR needs no erase, so nothing stalls the rootfs reads in a session. The last line
++# written before the power cut is the drive's summary: length, Android Auto time and drops, calls, peak temperature,
++# worst phone signal, hotspot devices and reconnects, data, memory, CPU (u2ac-home sends it as u2ac_drive_*).
++# Keys: up t ls(live s) ses err ring rst rep tmax smin sta dev join txf rx tx mem(kB) cpu(%); x = not known.
++# DR_OFF, DR_N, dr_lt (live ticks) and the running extremes dr_tmax/dr_smin/dr_sta/dr_mem live in the saver loop.
++dr_rec() {
++    [ -n "${DR_OFF:-}" ] && [ "${DR_N:-0}" -lt 256 ] || return 0
++    _o=$((DR_OFF + DR_N * 256))
++    [ "$(dd if="$FL_D" bs=256 skip=$((_o / 256)) count=1 2> /dev/null | tr -d '\377' | head -c 1 | wc -c)" = 0 ] \
++        || { DR_N=256; return 0; }
++    _up=$(cut -d. -f1 /proc/uptime); _t=x
++    _ck=$(cat /run/u2ac-clock 2> /dev/null); case $_ck in '' | *[!0-9]*) ;; *) _t=$((_up + _ck)) ;; esac
++    _rep=0; for _x in "$WI"/*.n; do [ -s "$_x" ] && _rep=$((_rep + $(cat "$_x"))); done
++    _rst=$(grep -c 'aa-proxy-rs exited' "$LOG" 2> /dev/null)
++    { iw dev wlan0 station dump 2> /dev/null
++      echo "@@aa"; grep -F -e 'Starting to proxy data' -e 'Connection error' -e 'hfp-guard:' /run/log/aa-proxy-rs.log 2> /dev/null
++      echo "@@hap"; grep -F 'AP-STA-CONNECTED' /run/log/hostapd.log 2> /dev/null
++      echo "@@sys"; for _f in /sys/class/thermal/thermal_zone0/temp /sys/class/net/wlan0/statistics/rx_bytes \
++          /sys/class/net/wlan0/statistics/tx_bytes; do v=; read -r v < "$_f" 2> /dev/null; echo "${v:-x}"; done
++      grep -m 1 '^MemAvailable:' /proc/meminfo; head -n 1 /proc/stat
++    } | awk -v up="$_up" -v t="$_t" -v ls="$((${dr_lt:-0} * 5))" -v rep="$_rep" -v rst="${_rst:-0}" \
++            -v tmax="${dr_tmax:-x}" -v smin="${dr_smin:-x}" -v sta="${dr_sta:-0}" -v mem="${dr_mem:-x}" '
++        /^@@/ { sec = substr($0, 3); next }
++        sec == "" && /^Station/ { n++ }
++        sec == "" && /^[ \t]*signal:/ { s = $2 + 0; if (smin == "x" || s < smin + 0) smin = s }
++        sec == "" && /^[ \t]*tx failed:/ { txf += $3 }
++        sec == "aa" { if (index($0, "Starting to proxy data")) ses++; else if (index($0, "Connection error")) err++; else if (index($0, "RING")) ring++ }
++        sec == "hap" { for (i = 1; i < NF; i++) if ($i == "AP-STA-CONNECTED") { dev[$(i + 1)] = 1; join++ } }
++        sec == "sys" { v[++nv] = $0 }
++        END {
++            if (v[1] != "x" && v[1] != "") { tc = int(v[1] / 1000); if (tmax == "x" || tc > tmax + 0) tmax = tc }
++            split(v[4], ma, " "); if (ma[2] != "" && (mem == "x" || ma[2] + 0 < mem + 0)) mem = ma[2]
++            split(v[5], c, " "); tot = 0; for (i = 2; i <= 8; i++) tot += c[i]
++            cpu = tot ? int(100 * (tot - c[5] - c[6]) / tot) : 0
++            if (n > sta) sta = n; nd = 0; for (d in dev) nd++
++            printf "D1 up=%d t=%s ls=%d ses=%d err=%d ring=%d rst=%d rep=%d tmax=%s smin=%s sta=%d dev=%d join=%d txf=%d rx=%s tx=%s mem=%s cpu=%d\n", \
++                up, t, ls, ses, err, ring, rst, rep, tmax, smin, sta, nd, join, txf, v[2], v[3], mem, cpu
++            print tmax, smin, sta, mem
++        }' > /run/dr.rec 2> /dev/null || return 0
++    { read -r _l; read -r dr_tmax dr_smin dr_sta dr_mem; } < /run/dr.rec
++    printf '%-255.255s\n' "$_l" > /run/dr.line
++    dd if=/run/dr.line of="$FL_D" bs=256 seek=$((_o / 256)) conv=notrunc 2> /dev/null && DR_N=$((DR_N + 1))
++    rm -f /run/dr.rec /run/dr.line
 +}
 +# fl_erased OFF: the 128 KiB slot at OFF reads all 0xFF
 +fl_erased() {
@@ -203892,6 +203942,9 @@ index 0000000..e6fcfec
 +            _n=$(fl_field "$_h" bytes)
 +            dd if="$FL_D" bs=512 skip=$(((FL_OFF + _i * FL_SLOT + FL_HDR) / 512)) count=$(((_n + 511) / 512)) 2> /dev/null \
 +                | head -c "$_n" | gunzip -c
++            # the drive records in the slot's second half (dr_rec), padding stripped
++            dd if="$FL_D" bs=65536 skip=$(((FL_OFF + _i * FL_SLOT) / 65536 + 1)) count=1 2> /dev/null | tr -d '\377' \
++                | awk '/^D1 up=[0-9]+ / && length($0) < 300 { sub(/ +$/, ""); if (!n++) print "=== drive records"; print }'
 +            return
 +        fi
 +        _i=$((_i + 1))
@@ -203902,6 +203955,13 @@ index 0000000..e6fcfec
 +start() {
 +    : > "$LOG"
 +    say "start"
++    # how the previous run ended (u2ac-metrics, flight log): WDOG1 WRSR, the source of the last reset (read-only):
++    # POR = power-on (the car's normal start), TOUT = the watchdog fired (userspace hung), SFTW = a software reboot
++    # (by hand, the car-off sleep's wake, or a kernel panic's restart). Plus the boot-slot counter's failed attempts
++    _w=$(devmem 0x020BC004 16 2> /dev/null); case $_w in 0x[0-9a-fA-F]*) _w=$((_w)) ;; *) _w=0 ;; esac
++    if [ $((_w & 16)) != 0 ]; then echo power; elif [ $((_w & 2)) != 0 ]; then echo watchdog
++    elif [ $((_w & 1)) != 0 ]; then echo software; else echo unknown; fi > /run/u2ac-reset
++    _bs=$(mtd_num bootstate 2> /dev/null) && bootslot_scan "$_bs" 2> /dev/null | awk '{ print $2 + 0 }' > /run/u2ac-bootfails
 +    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$g" 2>/dev/null; done
 +    echo 1 > /proc/sys/vm/overcommit_memory   # aa-proxy-rs reserves ~1 GiB of address space up front
 +    echo 4096 > /proc/sys/vm/min_free_kbytes  # keep atomic-allocation headroom for SDIO/USB/net (no compaction)
@@ -203990,7 +204050,7 @@ index 0000000..e6fcfec
 +        # started or stopped outside a session (aa-now, a test run), not only at session changes
 +        ar() { pgrep -x aa-proxy-rs > /dev/null && echo 1 || echo 0; }
 +        m=normal; k=0; lit=idle$(ar); [ $fault = 1 ] && lit=fault; bk=$(bt_key); live=0; fl_at=18; fl_sz=; wf=0
-+        had=0; seen=0; sleep_ticks=$((SLEEP_S / 5))
++        had=0; seen=0; sleep_ticks=$((SLEEP_S / 5)); dr_lt=0
 +        while :; do
 +            sleep "${U2AC_TICK:-5}"; k=$((k + 1))   # U2AC_TICK: the selftest's fast clock
 +            # the radios' daemons (radio_watch): wf = something is down right now
@@ -204031,6 +204091,10 @@ index 0000000..e6fcfec
 +                if [ "$fl_at" = "$k" ]; then
 +                    fl_write "${fl_why:-start+90s}"; fl_sz=$(wc -c < /run/log/aa-proxy-rs.log 2> /dev/null)
 +                fi
++                # the drive record (dr_rec): every 12 ticks = 60 s, every 60 = 5 min after 120 records
++                [ $st = live ] && dr_lt=$((dr_lt + 1))
++                dr_ev=12; [ "${DR_N:-0}" -ge 120 ] && dr_ev=60
++                [ $((k % dr_ev)) = 0 ] && dr_rec
 +                # outside a session: the next slot erased already (no I/O once it is)
 +                [ $m = session ] || fl_prep
 +            fi
@@ -204114,10 +204178,10 @@ index 0000000..e6fcfec
 +esac
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-home b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-home
 new file mode 100755
-index 0000000..3e6eb12
+index 0000000..b4fd55f
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-home
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,284 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# u2ac-home prep|push [SECONDS]|cleanup|status   (Carlinkit U2AC, milouk 2026-11-28)
@@ -204132,6 +204196,10 @@ index 0000000..3e6eb12
 +#            leave. SECONDS = the time box (20 by hand). Leaves wlan0 down: the caller starts the hotspot after
 +#            (by hand: `u2ac-aa home-now`, which stops and restarts the hotspot around it)
 +#   cleanup  the client side off wlan0 (wpa_supplicant, udhcpc, the DHCP address)
++# Each slot sent carries, besides its metrics: u2ac_flightlog_* (seq, why, when), the drive summary from the slot's
++# last drive record (u2ac_drive_*: length, drops, calls, peak temperature, worst signal, hotspot devices, data...),
++# and wall-clock start/end times when that boot's own upload learned the clock (/run/u2ac-clock, from the server's
++# HTTP Date: the dongle has no clock of its own).
 +# Learned too: u2ac-home.lease (the last DHCP address and router, asked for again and used as it was when DHCP
 +# cannot answer within a boot's box).
 +# Settings: /run/persist/u2ac-home.conf, literal KEY=value lines written by the web UI, never sourced:
@@ -204186,17 +204254,58 @@ index 0000000..3e6eb12
 +        [ -n "$_s" ] && [ "$_s" -gt "$_m" ] || continue
 +        # Prometheus text as u2ac-metrics wrote it, minus the HELP lines (the Pushgateway wants each name's HELP
 +        # equal across groups, and a firmware update may reword one), plus what identifies the slot
-+        u2ac-aa flightlog "$_s" 2> /dev/null | sed -n '/^=== metrics$/,/^=== /p' | grep -v -e '^=== ' -e '^# HELP ' \
-+            > "$H/q/$_s.tmp"
++        _t=$(echo "$_l" | sed -n 's/.* t=\([0-9][0-9]*\).*/\1/p')
++        u2ac-aa flightlog "$_s" > "$H/slot.txt" 2> /dev/null
++        sed -n '/^=== metrics$/,/^=== /p' "$H/slot.txt" | grep -v -e '^=== ' -e '^# HELP ' > "$H/q/$_s.tmp"
 +        if grep -q '^u2ac_up 1$' "$H/q/$_s.tmp"; then
 +            printf '# TYPE u2ac_flightlog_seq gauge\nu2ac_flightlog_seq %s\n# TYPE u2ac_flightlog_info gauge\nu2ac_flightlog_info{why="%s"} 1\n# TYPE u2ac_flightlog_written_seconds gauge\nu2ac_flightlog_written_seconds %s\n' \
 +                "$_s" "${_w:-unknown}" "${_u:-0}" >> "$H/q/$_s.tmp"
++            # wall-clock times (only for a boot whose own home upload learned the clock: a drive from home)
++            [ -n "$_t" ] && printf '# TYPE u2ac_flightlog_written_timestamp_seconds gauge\nu2ac_flightlog_written_timestamp_seconds %s\n# TYPE u2ac_drive_start_timestamp_seconds gauge\nu2ac_drive_start_timestamp_seconds %s\n' \
++                "$_t" "$((_t - ${_u:-0}))" >> "$H/q/$_s.tmp"
++            drive "$H/slot.txt" >> "$H/q/$_s.tmp"
 +            mv -f "$H/q/$_s.tmp" "$H/q/$_s.prom"
 +        else
 +            rm -f "$H/q/$_s.tmp"   # a slot from before the exporter (no metrics part): nothing to send
 +        fi
 +    done < "$H/list"
++    rm -f "$H/slot.txt"
 +    : > "$H/ready"
++}
++
++# drive SLOTTEXT: the slot's last drive record (u2ac-aa dr_rec) as u2ac_drive_* (Prometheus text, no HELP)
++drive() {
++    awk '/^D1 up=/ { last = $0; n++ }
++    function g(name, v) { if (v == "" || v == "x") return; printf "# TYPE %s gauge\n%s %s\n", name, name, v }
++    END {
++        if (!n) exit
++        m = split(last, F, " "); for (i = 2; i <= m; i++) { j = index(F[i], "="); if (j) v[substr(F[i], 1, j - 1)] = substr(F[i], j + 1) }
++        g("u2ac_drive_records", n)
++        g("u2ac_drive_seconds", v["up"]); g("u2ac_drive_live_seconds", v["ls"])
++        g("u2ac_drive_sessions", v["ses"]); g("u2ac_drive_drops", (v["ses"] + 0 > 1) ? v["ses"] - 1 : 0)
++        g("u2ac_drive_connection_errors", v["err"]); g("u2ac_drive_rings", v["ring"])
++        g("u2ac_drive_relay_restarts", v["rst"]); g("u2ac_drive_radio_repairs", v["rep"])
++        g("u2ac_drive_temperature_max_celsius", v["tmax"]); g("u2ac_drive_signal_min_dbm", v["smin"])
++        g("u2ac_drive_stations_max", v["sta"]); g("u2ac_drive_hotspot_devices", v["dev"]); g("u2ac_drive_hotspot_joins", v["join"])
++        g("u2ac_drive_tx_failed", v["txf"]); g("u2ac_drive_rx_bytes", v["rx"]); g("u2ac_drive_tx_bytes", v["tx"])
++        if (v["mem"] != "x" && v["mem"] != "") g("u2ac_drive_memory_available_min_bytes", v["mem"] * 1024)
++        if (v["cpu"] != "") g("u2ac_drive_cpu_busy_ratio", v["cpu"] / 100)
++        g("u2ac_drive_end_timestamp_seconds", v["t"])
++    }' "$1"
++}
++
++# clock: the wall clock from the server's HTTP Date header (wget -S) as an offset from power-on, in /run/u2ac-clock.
++# The system clock is never set: the relay's and hostapd's log stamps are read as seconds since power-on
++clock() {
++    awk -v up="$(cut -d' ' -f1 /proc/uptime)" '
++        tolower($1) == "date:" && !found {
++            split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", M, " "); for (i = 1; i <= 12; i++) mo[M[i]] = i
++            d = $3 + 0; m = mo[$4]; y = $5 + 0; split($6, h, ":"); if (!m || y < 2024 || y > 2100) next
++            yy = y - (m <= 2); era = int(yy / 400); yoe = yy - era * 400; mp = (m + 9) % 12   # days from civil
++            doy = int((153 * mp + 2) / 5) + d - 1; doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
++            printf "%d\n", (era * 146097 + doe - 719468) * 86400 + h[1] * 3600 + h[2] * 60 + h[3] - int(up); found = 1 }
++        END { exit !found }' "$1" > "$H/clock.tmp" && mv -f "$H/clock.tmp" /run/u2ac-clock
++    rm -f "$H/clock.tmp"
 +}
 +
 +# result STATE TEXT: this boot's outcome (u2ac-aa status, u2ac-metrics, the log). STATE: pushed absent failed none
@@ -204320,8 +204429,9 @@ index 0000000..3e6eb12
 +    _last=
 +    for _s; do
 +        [ "$(cs)" -lt "$END" ] || break
-+        wget -q -T "$(left)" -O /dev/null --header 'Content-Type: text/plain; version=0.0.4' \
++        wget -S -q -T "$(left)" -O /dev/null --header 'Content-Type: text/plain; version=0.0.4' \
 +            --post-file "$H/q/$_s.prom" "$BASE/metrics/job/u2ac/log_seq/$_s" 2> "$H/wget.err" || break
++        [ $NPUSH = 0 ] && clock "$H/wget.err"
 +        NPUSH=$((NPUSH + 1)); _last=$_s; rm -f "$H/q/$_s.prom"
 +        [ "$_s" -gt "$KEEP" ] && del $((_s - KEEP))
 +    done
@@ -204331,6 +204441,8 @@ index 0000000..3e6eb12
 +        [ "$(cat "$P/u2ac-home.sent" 2> /dev/null)" = "$_last" ] || echo "$_last" > "$P/u2ac-home.sent"
 +    fi
 +    cleanup
++    printf 'scan=%s join=%s address=%s signal=%s lease=%s\n' $((T1 - T0)) $((T2 - T1)) $((T3 - T2)) "$BSIG" \
++        "$([ "$HOW" = DHCP ] && echo 0 || echo 1)" > "$H/stats"
 +    if [ "$NPUSH" = $# ]; then
 +        result pushed "sent $NPUSH log(s) up to seq $_last to $HP (scan $(sec $((T1 - T0))), join $(sec $((T2 - T1))) at $BSIG dBm, address $(sec $((T3 - T2))) by $HOW)"
 +    elif [ "$NPUSH" -gt 0 ]; then result failed "sent $NPUSH of $# log(s), the server stopped answering"
@@ -204356,10 +204468,10 @@ index 0000000..3e6eb12
 +esac
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-metrics b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-metrics
 new file mode 100755
-index 0000000..29ccdbc
+index 0000000..0159e45
 --- /dev/null
 +++ b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/u2ac-metrics
-@@ -0,0 +1,234 @@
+@@ -0,0 +1,247 @@
 +#!/bin/sh
 +# SPDX-License-Identifier: GPL-3.0-or-later
 +# u2ac-metrics: the dongle's health as Prometheus text (exposition format 0.0.4), for GET /cgi-bin/metrics
@@ -204410,6 +204522,8 @@ index 0000000..29ccdbc
 +    -v fltoff="$([ -e "$P/u2ac-flightlog-off" ] && echo 1 || echo 0)" \
 +    -v sleeping="$([ -e "$R/run/u2ac-sleeping" ] && echo 1 || echo 0)" -v sleepoff="$([ -e "$P/u2ac-sleep-off" ] && echo 1 || echo 0)" \
 +    -v homeon="$([ -s "$P/u2ac-home.conf" ] && echo 1 || echo 0)" -v homeres="$(head -n 1 "$R/run/u2ac-home/result" 2> /dev/null)" \
++    -v homest="$(head -n 1 "$R/run/u2ac-home/stats" 2> /dev/null)" -v reset="$(cat "$R/run/u2ac-reset" 2> /dev/null)" \
++    -v bootfails="$(cat "$R/run/u2ac-bootfails" 2> /dev/null)" -v clock="$(cat "$R/run/u2ac-clock" 2> /dev/null)" \
 +    -v probe="$(cat "$R/run/u2ac-usbprobe" 2> /dev/null)" -v host="$(cat "$R/run/u2ac-usbhost" 2> /dev/null)" \
 +    -v rel="$(head -n 1 "$R/etc/baseline-release" 2> /dev/null)" -v kver="$(uname -r)" '
 +function rd(f,   l) { l = ""; if ((getline l < f) <= 0) l = ""; close(f); return l }
@@ -204593,6 +204707,17 @@ index 0000000..29ccdbc
 +        fam("u2ac_home_upload_result", "gauge", "this boot home upload: pushed, absent (home network not in range), failed, none (nothing new)")
 +        out("u2ac_home_upload_result", "result=\"" lab(HR[1]) "\"", 1)
 +    }
++    if (homest != "") {   # scan=CS join=CS address=CS signal=DBM lease=0/1 (u2ac-home, a pushed upload)
++        n = split(homest, HS, " "); for (i = 1; i <= n; i++) { j = index(HS[i], "="); hs[substr(HS[i], 1, j - 1)] = substr(HS[i], j + 1) }
++        fam("u2ac_home_upload_phase_seconds", "gauge", "this boot home upload, time per step")
++        n = split("scan join address", HP0, " "); for (i = 1; i <= n; i++) if (hs[HP0[i]] != "") out("u2ac_home_upload_phase_seconds", "phase=\"" HP0[i] "\"", hs[HP0[i]] / 100)
++        one("u2ac_home_upload_signal_dbm", "gauge", "home network signal at this boot upload", hs["signal"])
++        one("u2ac_home_upload_lease_reused", "gauge", "1 when DHCP did not answer in time and the last lease was used", hs["lease"])
++    }
++    # how the previous run ended (WDOG1 reset source at boot): power = a normal power-on
++    if (reset != "") { fam("u2ac_last_reset", "gauge", "what started this boot: power (power-on), software (reboot or kernel panic), watchdog (userspace hung)"); out("u2ac_last_reset", "cause=\"" lab(reset) "\"", 1) }
++    one("u2ac_boot_failed_attempts", "gauge", "boot-slot counter: rootfs boots that did not finish (3 = recovery)", bootfails)
++    if (clock ~ /^[0-9]+$/) one("u2ac_boot_timestamp_seconds", "gauge", "wall-clock time of power-on (learned by this boot home upload)", clock)
 +}'
 diff --git a/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/wifi-connect b/baseline/arm-imx6ul-u2ac/rootfs/usr/sbin/wifi-connect
 new file mode 100755

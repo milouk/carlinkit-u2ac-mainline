@@ -1,0 +1,77 @@
+# Prometheus alert rules for the Carlinkit U2AC home upload (Pushgateway job u2ac). Add to rule_files.
+# Each rule looks only at drive logs pushed in the last hour, so a drive alerts once and then resolves.
+groups:
+- name: Carlinkit dongle
+  rules:
+  - alert: CarDongleSlowStart
+    expr: (u2ac_aa_event_seconds{event="proxying"} > 40) and on(log_seq) ((time() - push_time_seconds{job="u2ac"}) < 3600)
+    labels:
+      severity: warning
+      service_type: car
+    annotations:
+      summary: Car dongle took {{ printf "%.0f" $value }} s to start Android Auto
+      description: "Drive {{ $labels.log_seq }}: Android Auto was on the car screen {{ printf \"%.1f\" $value }} s after power-on (usually 23 to 30 s). Grafana: Car dongle."
+
+  - alert: CarDongleNoAndroidAuto
+    expr: u2ac_flightlog_info{why="start+90s"} and on(log_seq) ((time() - push_time_seconds{job="u2ac"}) < 3600)
+    labels:
+      severity: warning
+      service_type: car
+    annotations:
+      summary: Car dongle had no Android Auto within 90 s of power-on
+      description: "Drive {{ $labels.log_seq }}: no Android Auto session in the first 90 s. Common causes: a VPN on the phone, Bluetooth off, the phone not in the car."
+
+  - alert: CarDongleDrops
+    expr: (u2ac_drive_drops > 0) and on(log_seq) ((time() - push_time_seconds{job="u2ac"}) < 3600)
+    labels:
+      severity: warning
+      service_type: car
+    annotations:
+      summary: Android Auto dropped {{ $value }} time(s) during a drive
+      description: "Drive {{ $labels.log_seq }}: the Android Auto session restarted {{ $value }} time(s) mid-drive."
+
+  - alert: CarDongleRepairs
+    expr: ((u2ac_drive_radio_repairs > 0) or (u2ac_drive_relay_restarts > 0)) and on(log_seq) ((time() - push_time_seconds{job="u2ac"}) < 3600)
+    labels:
+      severity: warning
+      service_type: car
+    annotations:
+      summary: Car dongle repaired itself during a drive
+      description: "Drive {{ $labels.log_seq }}: a radio daemon or the relay was restarted ({{ $value }} times). The flight log has the details."
+
+  - alert: CarDongleUnknownDevice
+    expr: (u2ac_drive_hotspot_devices > 1) and on(log_seq) ((time() - push_time_seconds{job="u2ac"}) < 3600)
+    labels:
+      severity: warning
+      service_type: car
+    annotations:
+      summary: "{{ $value }} devices joined the car dongle hotspot"
+      description: "Drive {{ $labels.log_seq }}: more than one device joined the dongle hotspot. If it was not your phone twice, change the hotspot password."
+
+  - alert: CarDongleHot
+    expr: (u2ac_drive_temperature_max_celsius >= 75) and on(log_seq) ((time() - push_time_seconds{job="u2ac"}) < 3600)
+    labels:
+      severity: warning
+      service_type: car
+    annotations:
+      summary: Car dongle reached {{ $value }} °C
+      description: "Drive {{ $labels.log_seq }}: the dongle chip peaked at {{ $value }} °C (it throttles at 85 °C)."
+
+  - alert: CarDongleUnexpectedRestart
+    expr: (u2ac_last_reset{cause="watchdog"} or (u2ac_boot_failed_attempts > 0)) and on(log_seq) ((time() - push_time_seconds{job="u2ac"}) < 3600)
+    labels:
+      severity: warning
+      service_type: car
+    annotations:
+      summary: Car dongle restarted unexpectedly
+      description: "Drive {{ $labels.log_seq }}: the dongle was started by its watchdog, or boot attempts failed. The flight log of the drive before has the details."
+
+  - alert: CarDongleNoUpload
+    expr: (time() - max(push_time_seconds{job="u2ac"})) > 7 * 86400
+    for: 1h
+    labels:
+      severity: info
+      service_type: car
+    annotations:
+      summary: No drive logs from the car dongle for {{ humanizeDuration $value }}
+      description: "The car dongle has not uploaded for over 7 days. Normal if the car was not driven from home. Otherwise check the home upload on the dongle web page."

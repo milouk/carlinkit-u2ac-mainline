@@ -209,6 +209,24 @@ dry run (car / computer / dev). Must end `selftest: 0 failure(s)`.
   error, against an nc Pushgateway stand-in) and dry.sh SCEN=carhome (at boot: before the hotspot, mark in
   the next slot).
 
+## Drive records, wall clock, reboot cause (u2ac-aa dr_rec, u2ac-home, u2ac-metrics)
+- Drive records: a slot's gzip stays in its first 64 KiB, and the second 64 KiB (erased with the slot) gets one
+  256-byte line per minute (every 5 min after 120 lines) from the saver loop, programmed into erased NOR, so no
+  erase and no stall in a session. Keys: up, t, ls (live s), ses, err, ring, rst, rep, tmax, smin, sta, dev
+  (distinct hotspot stations), join, txf, rx, tx, mem (kB), cpu (%). `u2ac-aa flightlog SEQ` prints them after the
+  logs ("=== drive records"). The last line is the drive's summary: u2ac-home sends it as `u2ac_drive_*`.
+- Wall clock: the dongle has no RTC and never sets its clock (the relay's and hostapd's log stamps are read as
+  seconds since power-on). The home upload reads the Pushgateway's HTTP `Date:` and keeps the offset in
+  /run/u2ac-clock. Slot headers (`t=`) and drive records of that boot then carry wall time, and the upload adds
+  `u2ac_drive_start_timestamp_seconds` / `u2ac_drive_end_timestamp_seconds`. Only drives that start at home
+  get times.
+- Reboot cause: WDOG1 WRSR (0x020BC004, read-only) at boot: POR = power-on, TOUT = watchdog timeout, SFTW =
+  software reboot or kernel panic, in /run/u2ac-reset and `u2ac_last_reset{cause}`. Failed boot attempts from the
+  boot-slot counter: `u2ac_boot_failed_attempts`.
+- Alerts (Prometheus rules, mainline/tools/grafana/u2ac-alerts.yml): slow start (> 40 s), no Android Auto in
+  90 s, drops, repairs, more than one hotspot device, 75 °C, watchdog restart or failed boots, no upload in 7 days.
+  Each looks only at groups pushed in the last hour, so a drive alerts once.
+
 ## Car-off sleep (u2ac-aa car_sleep; web Options "Sleep when the car is off", flag u2ac-sleep-off)
 - After a live AA session, once the car has not used the USB port (UDC not "configured") for 90 s
   (`U2AC_SLEEP_S`) and no session runs: aa-proxy-rs stopped (no more Bluetooth calls pulling the phone onto

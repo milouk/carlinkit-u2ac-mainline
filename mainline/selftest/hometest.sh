@@ -20,7 +20,7 @@ tr '\000' '\377' < /dev/zero | head -c 12976128 > $MTD_DEV/mtd3
 printf 'hsqs' | dd of=$MTD_DEV/mtd3 conv=notrunc 2> /dev/null
 printf '\000\220\235\000\000\000\000\000' | dd of=$MTD_DEV/mtd3 bs=1 seek=40 conv=notrunc 2> /dev/null
 FLOFF=$((12976128 - 1048576))
-# slot SEQ WHY METRICS(1/0) [HOME]: a slot as fl_write lays it out
+# slot SEQ WHY METRICS(1/0) [HOME] [T]: a slot as fl_write lays it out; /tmp/recs (lines) = its drive records
 slot() {
     { echo "=== u2ac flight log: up 88.00 s"; echo "=== status"; echo "aa-proxy-rs  running"
       if [ "$3" = 1 ]; then
@@ -30,13 +30,18 @@ slot() {
           printf 'u2ac_aa_event_seconds{event="bt_try"} 11.5\nu2ac_aa_event_seconds{event="proxying"} 2%s.3\n' "$1"
       fi
       echo "=== usb:configured gadget 0x2d00"; echo "=== tcp"; } | gzip -c > /tmp/g
-    _l="U2AC-FLIGHTLOG 1 seq=$1 up=88 why=$2 bytes=$(wc -c < /tmp/g)${4:+ home=$4}"
+    _l="U2AC-FLIGHTLOG 1 seq=$1 up=88 why=$2 bytes=$(wc -c < /tmp/g)${4:+ home=$4}${5:+ t=$5}"
     { echo "$_l"; head -c $((512 - ${#_l} - 1)) /dev/zero; cat /tmp/g; } > /tmp/slot
     dd if=/tmp/slot of=$MTD_DEV/mtd3 bs=512 seek=$(((FLOFF + ($1 % 8) * 131072) / 512)) conv=notrunc 2> /dev/null
+    _r=0; [ -s /tmp/recs ] && while read -r _x; do printf '%-255.255s\n' "$_x" \
+        | dd of=$MTD_DEV/mtd3 bs=256 seek=$(((FLOFF + ($1 % 8) * 131072 + 65536) / 256 + _r)) conv=notrunc 2> /dev/null; _r=$((_r + 1)); done < /tmp/recs
+    rm -f /tmp/recs
 }
 slot 1 bench-test 0
+printf '%s\n' 'D1 up=900 t=x ls=850 ses=1 err=0 ring=0 rst=0 rep=0 tmax=55 smin=-60 sta=1 dev=1 join=1 txf=2 rx=100 tx=10 mem=70000 cpu=30' \
+    'D1 up=1800 t=x ls=1700 ses=2 err=1 ring=4 rst=0 rep=1 tmax=61 smin=-71 sta=2 dev=2 join=3 txf=12 rx=500000000 tx=20000000 mem=60000 cpu=35' > /tmp/recs
 slot 2 session+60s 1
-slot 3 start+90s 1
+slot 3 start+90s 1 "" 1795870000
 
 # stubs: the home network "Home Net" (two access points, the second stronger) while /run/home-here exists
 mk /usr/sbin/iw 'echo "iw $*" >> /run/calls
@@ -62,7 +67,7 @@ b=; [ "$n" -gt 0 ] && b=$(head -c "$n")
 p=${p#/pg}; echo "$m $p $n" >> /run/pgw.log
 [ -n "$b" ] && printf "%s\n" "$b" > "/run/pgw.body.${p##*/}"
 if [ -e /run/pgw.fail ]; then printf "HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/plain\r\n\r\nno\n"
-else printf "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n"; fi'
+else printf "HTTP/1.0 200 OK\r\nDate: Sat, 28 Nov 2026 15:00:00 GMT\r\nContent-Type: text/plain\r\n\r\n"; fi'
 : > /run/pgw.log
 nc -lk -s 127.0.0.1 -p 19091 -e /fake/pgw.sh &
 sleep 1
@@ -91,6 +96,23 @@ has "posted 3" '^POST /metrics/job/u2ac/log_seq/3 ' /run/pgw.log
 chk "order" "$(grep -o 'log_seq/[0-9]*' /run/pgw.log | tr '\n' ' ')" "log_seq/2 log_seq/3 log_seq/1 "
 has "pruned seq 1 (KEEP 2)" '^DELETE /metrics/job/u2ac/log_seq/1 ' /run/pgw.log
 has "body as sent" '^u2ac_aa_event_seconds{event="proxying"} 22.3$' /run/pgw.body.2
+# the drive summary (last record) and the wall-clock times
+has "drive length" '^u2ac_drive_seconds 1800$' /run/pgw.body.2
+has "drive drops" '^u2ac_drive_drops 1$' /run/pgw.body.2
+has "drive worst signal" '^u2ac_drive_signal_min_dbm -71$' /run/pgw.body.2
+has "drive devices" '^u2ac_drive_hotspot_devices 2$' /run/pgw.body.2
+has "drive memory" '^u2ac_drive_memory_available_min_bytes 61440000$' /run/pgw.body.2
+has "drive cpu" '^u2ac_drive_cpu_busy_ratio 0.35$' /run/pgw.body.2
+has "drive records" '^u2ac_drive_records 2$' /run/pgw.body.2
+hasnt "no end time without a clock" '^u2ac_drive_end_timestamp_seconds' /run/pgw.body.2
+has "start time from the header" '^u2ac_drive_start_timestamp_seconds 1795869912$' /run/pgw.body.3
+grep -q '^u2ac_drive_records' /run/pgw.body.3 && { failn=$((failn + 1)); echo "FAIL drive summary without records"; } || pass=$((pass + 1))
+sh /o/metricscheck.sh /run/pgw.body.2 | grep -q -- '--- metrics: [0-9]* samples, 0 bad, 0 dup, 0 outside' && pass=$((pass + 1)) \
+    || { failn=$((failn + 1)); echo "FAIL body format: $(sh /o/metricscheck.sh /run/pgw.body.2 | tail -n 2)"; }
+# the clock from the server's Date (15:00:00 = 1795878000), never the system clock
+ck=$(( $(cat /run/u2ac-clock) + $(cut -d. -f1 /proc/uptime) - 1795878000 ))
+[ $ck -ge -2 ] && [ $ck -le 30 ] && pass=$((pass + 1)) || { failn=$((failn + 1)); echo "FAIL clock offset off by $ck s"; }
+has "upload stats" '^scan=[0-9]* join=[0-9]* address=[0-9]* signal=-48 lease=0$' /run/u2ac-home/stats
 chk "mark (RAM)" "$(cat /run/u2ac-home/sent)" 3
 chk "mark (persist)" "$(cat /run/persist/u2ac-home.sent)" 3
 chk "channel learned" "$(cat /run/persist/u2ac-home.freq)" 2437
